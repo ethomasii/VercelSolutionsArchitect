@@ -1,7 +1,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import { sql } from './db';
-import { getRecentChanges } from './integrations/github';
+import { getRecentChanges, readRepoFile } from './integrations/github';
 import { searchRunbooks as searchConfluence } from './integrations/confluence';
 import { checkVendorStatus, detectVendors } from './vendor-status';
 
@@ -55,7 +55,19 @@ Classification guidance for ambiguous cases:
       affectedPipeline: z.string().describe('Best guess at pipeline/asset name'),
       keySignals: z.array(z.string()).describe('Key error strings extracted from log'),
       vendorsDetected: z.array(z.string()).describe(
-        'Vendor/product names explicitly found in the log or run context (e.g. ["snowflake","fivetran"]). Empty array if none named.'
+        'Vendor/product names explicitly found in the log or run context. Empty array if none named.'
+      ),
+      // Stack trace extraction — enables file reading and code fix proposals
+      stackTrace: z.object({
+        filePath: z.string().describe('Exact file path from traceback, e.g. enriched_data/assets.py'),
+        lineNumber: z.number().optional().describe('Line number from traceback'),
+        errorType: z.string().describe('Exception/error type, e.g. AttributeError, KeyError, SnowflakeError'),
+        errorMessage: z.string().describe('The specific error message text'),
+        repoType: z.enum(['dbt', 'dagster', 'airflow', 'databricks', 'generic']).describe(
+          'Which repo type this file belongs to — determines which GitHub instance to read from'
+        ),
+      }).optional().describe(
+        'Extract ONLY when a stack trace with file path is present. Enables reading the actual file and proposing code fixes.'
       ),
       reasoning: z.string(),
     }),
@@ -257,19 +269,49 @@ Critical for identifying known-flaky pipelines and recurring patterns.`,
 
   searchGitContext: tool({
     description: `Check for recent code changes that may have caused this failure.
-A PR merged hours ago is often the smoking gun. Call this for any code_regression
-or schema_mismatch classification.`,
+A PR merged hours ago is often the smoking gun.
+
+ALSO: if classifyFailure extracted a stackTrace.filePath, read that file from the
+appropriate GitHub repo instance to show the agent the exact broken code.
+- stackTrace.repoType = 'dbt' → read from the 'dbt' GitHub instance (dbt project repo)
+- stackTrace.repoType = 'dagster' → read from 'dagster' instance
+- stackTrace.repoType = 'airflow' → read from 'airflow' instance
+- stackTrace.lineNumber → show ±15 lines around the error
+
+This is what turns a stack trace from a vague hint into an exact line to fix.`,
     inputSchema: z.object({
       pipelineName: z.string(),
       failureType: z.string(),
       hoursBack: z.number().default(24),
+      stackTraceFile: z.string().optional().describe('File path from classifyFailure.stackTrace.filePath'),
+      stackTraceLine: z.number().optional().describe('Line number from classifyFailure.stackTrace.lineNumber'),
+      repoInstance: z.string().optional().describe('GitHub instance name from stackTrace.repoType: dbt, dagster, airflow, etc.'),
     }),
-    execute: async ({ pipelineName, hoursBack }) => {
-      // Delegates to /lib/integrations/github.ts.
-      // Today: returns simulated data from Neon (source: 'simulated').
-      // To wire up real GitHub: set GITHUB_TOKEN env var and update github.ts.
-      // This tool's interface never changes — only the integration implementation.
-      return await getRecentChanges(pipelineName, hoursBack);
+    execute: async ({ pipelineName, hoursBack, stackTraceFile, stackTraceLine, repoInstance }) => {
+      const gitResult = await getRecentChanges(pipelineName, hoursBack);
+
+      // If we have a stack trace file path, read the actual code from the repo
+      let codeContext: { path: string; relevantLines: string; lineStart: number } | null = null;
+      if (stackTraceFile) {
+        const instance = repoInstance ?? 'default';
+        const fileData = await readRepoFile(stackTraceFile, instance);
+        if (fileData) {
+          const lines = fileData.content.split('\n');
+          const lineNum = stackTraceLine ?? 1;
+          const start = Math.max(0, lineNum - 15);
+          const end = Math.min(lines.length, lineNum + 15);
+          const relevantLines = lines
+            .slice(start, end)
+            .map((l, i) => `${start + i + 1}${start + i + 1 === lineNum ? ' ← ERROR' : '      '}: ${l}`)
+            .join('\n');
+          codeContext = { path: stackTraceFile, relevantLines, lineStart: start + 1 };
+        }
+      }
+
+      return {
+        ...gitResult,
+        codeContext,
+      };
     },
   }),
 

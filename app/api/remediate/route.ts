@@ -145,30 +145,35 @@ export async function POST(req: Request) {
     }
 
     case 'create_pr': {
-      const token = await getSetting('github', 'GITHUB_TOKEN');
-      const owner = await getSetting('github', 'GITHUB_REPO_OWNER');
-      const repo = await getSetting('github', 'GITHUB_REPO_NAME');
-
-      if (!token || !owner || !repo) {
-        return Response.json({
-          ok: false,
-          error: 'GitHub credentials not configured',
-          setup: 'Go to /settings → GitHub and add GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME',
-        }, { status: 400 });
-      }
-
-      const { filePath, oldText, newText, branchName, prTitle, prBody, commitMessage } = params;
+      const { filePath, oldText, newText, branchName, prTitle, prBody, commitMessage, repoInstance } = params;
       if (!filePath || !oldText || !newText || !branchName || !prTitle) {
         return Response.json({ ok: false, error: 'filePath, oldText, newText, branchName, prTitle required' }, { status: 400 });
       }
 
+      // Support named repo instances (dbt, dagster, airflow, etc.)
+      const instance = repoInstance ?? 'default';
+      const ghToken = (await getSetting('github', 'GITHUB_TOKEN', instance))
+        || (await getSetting('github', 'GITHUB_TOKEN', 'default'));
+      const ghOwner = (await getSetting('github', 'GITHUB_REPO_OWNER', instance))
+        || (await getSetting('github', 'GITHUB_REPO_OWNER', 'default'));
+      const ghRepo = (await getSetting('github', 'GITHUB_REPO_NAME', instance))
+        || (await getSetting('github', 'GITHUB_REPO_NAME', 'default'));
+
+      if (!ghToken || !ghOwner || !ghRepo) {
+        return Response.json({
+          ok: false,
+          error: `GitHub credentials not configured${repoInstance ? ` for instance "${repoInstance}"` : ''}`,
+          setup: `Go to /settings → GitHub${repoInstance ? ` → add instance "${repoInstance}"` : ''} and add GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME`,
+        }, { status: 400 });
+      }
+
       const headers = {
-        'Authorization': `Bearer ${token}`,
+        'Authorization': `Bearer ${ghToken}`,
         'Accept': 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
         'Content-Type': 'application/json',
       };
-      const base = `https://api.github.com/repos/${owner}/${repo}`;
+      const base = `https://api.github.com/repos/${ghOwner}/${ghRepo}`;
 
       try {
         // 1. Get the default branch SHA

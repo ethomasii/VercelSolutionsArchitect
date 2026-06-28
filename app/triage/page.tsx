@@ -264,6 +264,20 @@ function ToolDetail({ toolName, output }: { toolName: string; output: unknown })
         {o.source === 'simulated' && (
           <p className="text-xs text-zinc-700 italic">Source: simulated (set GITHUB_TOKEN to use real GitHub API)</p>
         )}
+        {/* Code context from stack trace file reading */}
+        {(o as { codeContext?: { path: string; relevantLines: string } }).codeContext && (
+          <div className="rounded-lg border border-blue-800/30 bg-blue-950/10 overflow-hidden">
+            <div className="px-3 py-1.5 border-b border-blue-800/20 flex items-center gap-2">
+              <span className="text-xs font-medium text-blue-300">📄 Code from repo</span>
+              <code className="text-xs font-mono text-blue-400/70 truncate">
+                {(o as { codeContext: { path: string } }).codeContext.path}
+              </code>
+            </div>
+            <pre className="px-3 py-2 text-xs font-mono text-zinc-400 leading-relaxed overflow-x-auto whitespace-pre max-h-48 overflow-y-auto">
+              {(o as { codeContext: { relevantLines: string } }).codeContext.relevantLines}
+            </pre>
+          </div>
+        )}
       </div>
     );
   }
@@ -369,11 +383,12 @@ function getToolSummary(toolName: string, part: ToolPartGeneric): string {
     return `${r?.totalIncidents ?? 0} prior incident${(r?.totalIncidents ?? 0) !== 1 ? 's' : ''} found${flaky}`;
   }
   if (toolName === 'searchGitContext') {
-    const r = o as { commits?: Array<{ isLikelyCause?: boolean; message?: string }> } | undefined;
+    const r = o as { commits?: Array<{ isLikelyCause?: boolean; message?: string }>; codeContext?: { path: string } } | undefined;
     const cause = r?.commits?.find(c => c.isLikelyCause);
-    if (cause) return `⚠️ PR merged recently: "${cause.message?.slice(0, 45)}"`;
+    const hasCode = !!r?.codeContext;
+    if (cause) return `⚠️ PR merged recently: "${cause.message?.slice(0, 45)}"${hasCode ? ' + code read' : ''}`;
     const count = r?.commits?.length ?? 0;
-    return count > 0 ? `${count} recent commit${count !== 1 ? 's' : ''}` : 'no recent changes found';
+    return count > 0 ? `${count} recent commit${count !== 1 ? 's' : ''}${hasCode ? ' + code read' : ''}` : 'no recent changes found';
   }
   if (toolName === 'checkVendorStatus') {
     const r = o as { summary?: string; hasActiveIncidents?: boolean } | undefined;
