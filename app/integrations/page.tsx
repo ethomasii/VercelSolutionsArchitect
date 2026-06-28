@@ -20,15 +20,99 @@ export default function IntegrationsPage() {
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-white mb-2">Integrations</h1>
           <p className="text-sm text-zinc-500 max-w-2xl">
-            Every integration lives behind an{' '}
-            <code className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs font-mono text-zinc-400">execute()</code>
-            {' '}function in{' '}
+            Every integration is a one-file change in{' '}
             <code className="rounded bg-zinc-800 px-1.5 py-0.5 text-xs font-mono text-zinc-400">lib/integrations/</code>.
-            Wiring up a real API is a one-file change. Each integration unlocks a different layer of context.
+            Each shows what visibility Dispatch currently has vs. what remains a gap.
           </p>
         </div>
 
-        {/* Groups */}
+        {/* Visibility coverage map */}
+        <div className="mb-8 rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
+          <h2 className="text-sm font-semibold text-zinc-300 mb-1">🗺️ Cross-Vendor Visibility Coverage</h2>
+          <p className="text-xs text-zinc-500 mb-4">
+            No single tool gives you full visibility across a heterogeneous data stack. This is what Dispatch closes.
+          </p>
+          <div className="space-y-2">
+            {COVERAGE_ITEMS.map((item, i) => (
+              <div key={i} className="flex items-start gap-3">
+                <span className={`mt-0.5 text-xs shrink-0 w-4 ${
+                  item.coverage === 'full' ? 'text-green-500' :
+                  item.coverage === 'partial' ? 'text-amber-500' :
+                  item.coverage === 'gap' ? 'text-red-500/70' :
+                  'text-zinc-600'
+                }`}>
+                  {item.coverage === 'full' ? '✓' : item.coverage === 'partial' ? '◑' : item.coverage === 'gap' ? '✗' : '◦'}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-zinc-300">{item.signal}</span>
+                    <span className={`text-xs rounded px-1.5 py-0.5 ${
+                      item.coverage === 'full' ? 'bg-green-500/10 text-green-400' :
+                      item.coverage === 'partial' ? 'bg-amber-500/10 text-amber-400' :
+                      item.coverage === 'gap' ? 'bg-red-500/10 text-red-400' :
+                      'bg-zinc-800 text-zinc-600'
+                    }`}>{item.coverage}</span>
+                    {item.tool && <span className="text-xs text-zinc-600">via {item.tool}</span>}
+                  </div>
+                  <p className="text-xs text-zinc-600 leading-relaxed mt-0.5">{item.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-zinc-700 mt-4 pt-3 border-t border-zinc-800">
+            The practical fix for messy enterprises:{' '}
+            <strong className="text-zinc-500">periodic log export to Neon</strong>.
+            Each orchestrator exports run summaries to the{' '}
+            <code className="font-mono text-zinc-600">incidents</code> table.
+            Dispatch then has unified cross-vendor history regardless of who orchestrates what.
+          </p>
+        </div>
+
+        {/* Orchestrator gaps note */}
+        <div className="mb-8 rounded-xl border border-amber-800/25 bg-amber-950/10 p-5">
+          <h3 className="text-sm font-semibold text-amber-300 mb-2">⚠️ What if you don&apos;t use Dagster?</h3>
+          <p className="text-xs text-zinc-400 leading-relaxed mb-3">
+            Dispatch is orchestrator-agnostic by design. Dagster gives the richest context (asset graph + prior runs),
+            but the same triage pattern works with any orchestrator — the tool calls don&apos;t change.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {[
+              { icon: '🐙', name: 'GitHub Actions', note: 'Webhook on workflow failure → enriched prompt via GitHub API. No lineage, but full log access.' },
+              { icon: '🔧', name: 'AWS Step Functions', note: 'EventBridge rule on FAILED → CloudWatch Logs for steps. Lineage from CloudFormation / CDK definitions.' },
+              { icon: '🌬️', name: 'Airflow', note: 'astro-airflow-mcp diagnose_dag_run gets failed tasks + logs. Lineage via Airflow Datasets (AIP-48).' },
+              { icon: '📋', name: 'No orchestrator (cron)', note: 'The hardest case. Log to CloudWatch or Datadog. Dispatch ingests via webhook on failure. Runbooks fill the lineage gap.' },
+              { icon: '⚙️', name: 'Databricks Workflows', note: 'Databricks has a Jobs API. Lineage via Unity Catalog lineage graph (similar to Dagster asset graph).' },
+              { icon: '🔄', name: 'dbt Cloud', note: 'dbt Cloud has webhooks on job failure. Full model-level test results + lineage via dbt compile graph.' },
+            ].map((item, i) => (
+              <div key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+                <span className="text-base shrink-0">{item.icon}</span>
+                <div>
+                  <p className="text-xs font-medium text-zinc-300">{item.name}</p>
+                  <p className="text-xs text-zinc-600 leading-relaxed mt-0.5">{item.note}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* MCP hosting model */}
+        <div className="mb-6 rounded-xl border border-zinc-800 bg-zinc-900/20 p-4">
+          <p className="text-xs font-medium text-zinc-400 mb-2">MCP hosting model — matters for how you connect</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+            <div>
+              <p className="text-green-400 font-medium mb-1">✅ Hosted (remote HTTP — just add credentials)</p>
+              <p className="text-zinc-600">Dagster · Stripe · Vercel · Neon</p>
+              <p className="text-zinc-700 mt-0.5">Add URL + headers to .cursor/mcp.json — done.</p>
+            </div>
+            <div>
+              <p className="text-amber-400 font-medium mb-1">⚠️ Self-hosted (local process — run uvx locally)</p>
+              <p className="text-zinc-600">Fivetran (community) · Airflow (local mode)</p>
+              <p className="text-zinc-700 mt-0.5">Airflow can become hosted by deploying the plugin into your webserver.</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Integration groups */}
         {INTEGRATION_GROUPS.map(group => {
           const groupIntegrations = integrations.filter(i => i.group === group.id);
           return (
@@ -47,86 +131,35 @@ export default function IntegrationsPage() {
           );
         })}
 
-        {/* Dagster MCP deep-dive */}
-        <div className="mt-4 rounded-xl border border-blue-500/20 bg-blue-950/10 p-5">
+        {/* OpenLineage callout */}
+        <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900/20 p-5">
           <div className="flex items-start gap-3">
-            <span className="text-xl mt-0.5">🔮</span>
-            <div className="flex-1">
-              <h3 className="text-sm font-semibold text-blue-300 mb-1">
-                Dagster MCP — The Cross-Pipeline Context Layer
-              </h3>
+            <span className="text-xl mt-0.5">🔗</span>
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-200 mb-1">OpenLineage — The Missing Standard</h3>
               <p className="text-xs text-zinc-400 leading-relaxed mb-3">
-                Dagster exposes a{' '}
-                <a href="https://docs.dagster.io/guides/operate/model-context-protocol" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
-                  remote MCP server
-                </a>{' '}
-                that gives Dispatch visibility across your entire asset graph. When{' '}
-                <code className="rounded bg-zinc-800 px-1 py-0.5 text-xs font-mono text-zinc-400">dbt_customers_transform</code>{' '}
-                fails, Dispatch can traverse the dependency graph to find that{' '}
-                <code className="rounded bg-zinc-800 px-1 py-0.5 text-xs font-mono text-zinc-400">fivetran_orders_daily</code>{' '}
-                failed upstream — even if the dbt error log has no mention of Fivetran.
+                <a href="https://openlineage.io" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">OpenLineage</a>{' '}
+                is the open standard for data lineage events. Airflow, dbt, Spark, Flink, and others emit lineage events
+                to a central collector (like Marquez). If your team already emits OpenLineage events, Dispatch could
+                consume them to build the cross-vendor dependency graph automatically — without knowing anything about
+                your specific orchestrator.
               </p>
-
-              <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 {[
-                  { icon: '🔗', title: 'Asset dependency traversal', desc: 'Find the first failing upstream node, not just the reported failure' },
-                  { icon: '📋', title: 'Full run logs', desc: 'All asset materializations in a run — not just the error snippet' },
-                  { icon: '⬆️', title: 'Cross-pipeline correlation', desc: 'Was something else running that caused resource contention?' },
-                  { icon: '⚡', title: 'Run failure sensor', desc: 'Webhook to auto-triage every failure before on-call opens laptop' },
+                  { name: 'Airflow', note: 'openlineage-airflow plugin — emits on task start/end' },
+                  { name: 'dbt', note: 'dbt-openlineage — emits model lineage on run' },
+                  { name: 'Spark / Flink', note: 'OpenLineage Spark/Flink listeners built-in' },
                 ].map((item, i) => (
-                  <div key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-900/40 p-2.5">
-                    <span className="text-sm">{item.icon}</span>
-                    <div>
-                      <p className="text-xs font-medium text-zinc-300">{item.title}</p>
-                      <p className="text-xs text-zinc-600 mt-0.5">{item.desc}</p>
-                    </div>
+                  <div key={i} className="rounded border border-zinc-800 bg-zinc-950 px-3 py-2">
+                    <p className="text-xs font-medium text-zinc-300">{item.name}</p>
+                    <p className="text-xs text-zinc-600 mt-0.5">{item.note}</p>
                   </div>
                 ))}
               </div>
-
-              <div className="rounded-lg bg-zinc-900 border border-zinc-800 p-3">
-                <p className="text-xs font-medium text-zinc-400 mb-2">Connect to Dagster+ MCP:</p>
-                <pre className="text-xs font-mono text-zinc-500 leading-relaxed whitespace-pre-wrap">{`# 1. Get token: Dagster+ → Admin → User Tokens → Create token
-# 2. Add to .cursor/mcp.json (already done — fill in your credentials):
-
-{
-  "dagster": {
-    "url": "https://mcp.agent.dagster.cloud/mcp/",
-    "headers": {
-      "Authorization": "Bearer YOUR_DAGSTER_USER_TOKEN",
-      "Dagster-Cloud-Organization": "YOUR_ORG_SLUG"
-    }
-  }
-}
-
-# 3. For Dispatch server-side context: set in Vercel env vars:
-DAGSTER_HOST=https://your-org.dagster.cloud
-DAGSTER_TOKEN=your-token
-# → lib/integrations/dagster.ts will use these to fetch run context`}</pre>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Vendor status note */}
-        <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900/30 p-5">
-          <div className="flex items-start gap-3">
-            <span className="text-xl mt-0.5">🌐</span>
-            <div>
-              <h3 className="text-sm font-semibold text-zinc-200 mb-1">Vendor Status — Live</h3>
-              <p className="text-xs text-zinc-400 leading-relaxed mb-2">
-                Dispatch now calls vendor status pages in real-time as part of triage (tool 5:{' '}
-                <code className="rounded bg-zinc-800 px-1 py-0.5 text-xs font-mono text-zinc-400">checkVendorStatus</code>
-                ). If Fivetran or Snowflake is having an incident, the agent surfaces this before you spend 20 minutes debugging code.
+              <p className="text-xs text-zinc-700 mt-3">
+                Dispatch upgrade path: add an OpenLineage consumer tool that queries a Marquez instance for the
+                dependency graph of any failing asset — works across ALL orchestrators that emit OpenLineage events.
               </p>
-              <div className="flex flex-wrap gap-2">
-                {['fivetran', 'snowflake', 'dbt cloud', 'databricks', 'stripe', 'github', 'shopify', 'salesforce', 'airflow'].map(v => (
-                  <a key={v} href={`https://status.${v.replace(' ', '')}.com`} target="_blank" rel="noopener noreferrer"
-                    className="rounded bg-zinc-800 px-2 py-0.5 text-xs font-mono text-zinc-500 hover:text-zinc-300 transition capitalize">
-                    {v}
-                  </a>
-                ))}
-              </div>
             </div>
           </div>
         </div>
@@ -136,15 +169,33 @@ DAGSTER_TOKEN=your-token
 }
 
 // -------------------------------------------------------------------
-// Integration groups and data
+// Coverage map
+// -------------------------------------------------------------------
+const COVERAGE_ITEMS = [
+  { signal: 'Why did THIS run fail?', coverage: 'full', tool: 'Dagster/Airflow MCP → run logs', desc: 'Full error logs from the current run. The first question every on-call asks.' },
+  { signal: 'Has this failed before? Is it recurring?', coverage: 'full', tool: 'Neon incidents table + Dagster list_runs', desc: 'Prior run history + incident DB. Recurring vs. first-time failure changes the remediation entirely.' },
+  { signal: 'What changed in the code recently?', coverage: 'full', tool: 'GitHub API or git_context table', desc: 'PRs merged in the last 24h. Column rename 4 hours ago is often the smoking gun.' },
+  { signal: 'Is the upstream vendor having an outage?', coverage: 'full', tool: 'StatusPage APIs (real-time)', desc: 'Fivetran/Snowflake/dbt status pages checked in real-time. Vendor outage → wait, not debug.' },
+  { signal: 'What did the upstream Fivetran sync load?', coverage: 'partial', tool: 'Fivetran API (self-hosted MCP)', desc: 'Row counts, sync status, 0-row silent failures. Requires Fivetran credentials + running the MCP locally.' },
+  { signal: 'Which assets depend on the failing one?', coverage: 'partial', tool: 'Dagster asset graph only', desc: 'Downstream impact analysis. Available in Dagster. Other orchestrators: use dbt lineage or OpenLineage.' },
+  { signal: 'What ran upstream in the last 2 hours?', coverage: 'partial', tool: 'Dagster list_runs + asset health check', desc: 'Implemented: checks recently-failed assets in the deployment. Gap: cross-orchestrator (Airflow + Dagster in same stack).' },
+  { signal: 'What caused the failure in GitHub Actions / Step Functions?', coverage: 'gap', tool: '—', desc: 'No MCP yet. GitHub Actions API works; Step Functions requires CloudWatch. Webhook handlers exist in the codebase as stubs.' },
+  { signal: 'Full cross-vendor lineage graph', coverage: 'gap', tool: '—', desc: 'No single tool covers this. Options: OpenLineage/Marquez (emit from all tools), dbt sources.yml (partial), Dagster asset graph (Dagster-only).' },
+  { signal: 'Snowflake query history / warehouse contention', coverage: 'gap', tool: '—', desc: 'SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY is a gold mine for diagnosing resource contention. Requires Snowflake creds.' },
+  { signal: 'Databricks job context / Unity Catalog lineage', coverage: 'gap', tool: '—', desc: 'Databricks Jobs API + Unity Catalog lineage API would provide Databricks-equivalent of Dagster asset graph.' },
+  { signal: 'Legacy cron jobs / no orchestrator', coverage: 'gap', tool: '—', desc: 'The hardest case. Best solution: each cron job POSTs to /api/webhooks/dagster on failure, Dispatch triages. Runbooks fill the context gap.' },
+];
+
+// -------------------------------------------------------------------
+// Integration groups
 // -------------------------------------------------------------------
 const INTEGRATION_GROUPS = [
   { id: 'core', icon: '🏗️', label: 'Core', description: '— always active' },
-  { id: 'orchestration', icon: '⚡', label: 'Orchestration', description: '— cross-pipeline context' },
+  { id: 'orchestration', icon: '⚡', label: 'Orchestration', description: '— pipeline execution context' },
   { id: 'ingestion', icon: '📥', label: 'Ingestion / Sources', description: '— upstream failure detection' },
   { id: 'transformation', icon: '🔄', label: 'Transformation', description: '— dbt, Spark, Snowflake' },
-  { id: 'knowledge', icon: '📖', label: 'Knowledge Base', description: '— runbooks, docs, incidents' },
-  { id: 'alerting', icon: '🔔', label: 'Alerting / On-call', description: '— notifications and escalation' },
+  { id: 'knowledge', icon: '📖', label: 'Knowledge Base', description: '— runbooks, docs' },
+  { id: 'alerting', icon: '🔔', label: 'Alerting / On-call', description: '— notifications' },
 ];
 
 type IntegrationStatus = 'connected' | 'simulated' | 'disabled';
@@ -163,14 +214,14 @@ function getIntegrationStatus(): Integration[] {
     {
       id: 'neon', group: 'core', icon: '🐘', name: 'Neon Postgres',
       status: env('DATABASE_URL') ? 'connected' : 'disabled',
-      description: 'Runbooks, incident history, git context, eval cases. pgvector ready for semantic search.',
-      dataProvided: ['Runbook full-text search', '90-day incident history', 'Git context (simulated)', 'pgvector for semantic search (ready)'],
+      description: 'Runbooks, incident history, git context, settings. pgvector ready.',
+      dataProvided: ['Runbook full-text + failure_type search', '90-day incident history', 'Encrypted integration settings', 'pgvector semantic search (column ready)'],
       envVars: ['DATABASE_URL'], file: 'lib/db.ts',
     },
     {
       id: 'ai-gateway', group: 'core', icon: '🔀', name: 'Vercel AI Gateway',
       status: env('VERCEL_OIDC_TOKEN') || env('AI_GATEWAY_API_KEY') ? 'connected' : 'disabled',
-      description: 'Model routing, failover, cost tracking. OIDC auth — no key rotation needed.',
+      description: 'Model routing, failover, cost tracking. OIDC — no key rotation.',
       dataProvided: ['openai/gpt-5.4 primary', 'anthropic/claude-haiku-4.5 fallback', 'Token cost per tool call', 'Latency traces'],
       envVars: ['VERCEL_OIDC_TOKEN (auto via vercel env pull)'], file: 'lib/models.ts',
       setupNote: 'vercel link && vercel env pull .env.local',
@@ -179,19 +230,43 @@ function getIntegrationStatus(): Integration[] {
     {
       id: 'dagster', group: 'orchestration', icon: '⚡', name: 'Dagster',
       status: env('DAGSTER_HOST') ? 'connected' : 'simulated',
-      description: 'Run logs, asset graph traversal, upstream + prior-run context. Official hosted MCP.',
-      dataProvided: ['Full run logs + upstream asset graph walk', 'Prior run history (recurring failure detection)', 'Cross-pipeline recently-failed asset check', 'Run failure sensor → auto-triage'],
+      description: 'Run logs, asset graph, prior runs, upstream failures. Best-in-class for data pipelines.',
+      dataProvided: ['get_run + get_run_logs: full step logs', 'list_runs: prior run history (recurring?)', 'get_assets: recently-failed upstream assets', 'Run failure sensor → auto-triage webhook'],
       envVars: ['DAGSTER_HOST', 'DAGSTER_TOKEN', 'DAGSTER_ORG'], file: 'lib/integrations/dagster.ts',
       docsUrl: 'https://docs.dagster.io/guides/operate/model-context-protocol',
-      setupNote: '✅ HOSTED: mcp.agent.dagster.cloud/mcp/ (requires X-Dagster-Delegation-Token header)',
+      setupNote: '✅ HOSTED MCP: mcp.agent.dagster.cloud/mcp/ (+ X-Dagster-Delegation-Token header)',
     },
     {
       id: 'airflow', group: 'orchestration', icon: '🌬️', name: 'Airflow / Astronomer',
       status: env('AIRFLOW_HOST') ? 'connected' : 'disabled',
-      description: 'DAG run context, task logs, data lineage. astro-airflow-mcp supports local AND hosted plugin mode.',
-      dataProvided: ['diagnose_dag_run: failed tasks + logs in one call', 'Data lineage: get_upstream_asset_events', 'Concurrent job resource contention', 'Supports Airflow 2.x and 3.x'],
+      description: 'DAG run context, task logs, data lineage. Can be hosted as Airflow plugin.',
+      dataProvided: ['diagnose_dag_run: failed tasks + logs in one call', 'Data lineage via Airflow Datasets (AIP-48)', 'explore_dag: full DAG context + source code', 'Hosted mode: exposes /mcp/v1/ on webserver'],
       envVars: ['AIRFLOW_HOST', 'AIRFLOW_API_KEY'], file: 'lib/integrations/airflow.ts',
-      setupNote: 'LOCAL: uvx astro-airflow-mcp | HOSTED: deploy plugin → <airflow-url>/mcp/v1/',
+      setupNote: 'LOCAL: uvx astro-airflow-mcp | HOSTED: add to requirements.txt → /mcp/v1/ on webserver',
+    },
+    {
+      id: 'github-actions', group: 'orchestration', icon: '🐙', name: 'GitHub Actions',
+      status: env('GITHUB_TOKEN') ? 'connected' : 'disabled',
+      description: 'Workflow run logs, step failures, trigger context. Very common for non-Dagster data pipelines.',
+      dataProvided: ['Workflow run logs via GitHub API', 'Failed step identification', 'Git context already covered by GitHub integration', 'Webhook: POST to /api/webhooks/github-actions on failure'],
+      envVars: ['GITHUB_TOKEN (same as GitHub integration)'], file: 'lib/integrations/github.ts',
+      setupNote: 'GET /repos/{owner}/{repo}/actions/runs/{run_id}/logs — same token as git context',
+    },
+    {
+      id: 'step-functions', group: 'orchestration', icon: '🔧', name: 'AWS Step Functions',
+      status: env('AWS_ACCESS_KEY_ID') ? 'connected' : 'disabled',
+      description: 'Execution history, step failures. Used by many AWS-native data teams.',
+      dataProvided: ['GetExecutionHistory: all step events + errors', 'CloudWatch Logs: detailed step output', 'EventBridge rule: trigger triage on FAILED state'],
+      envVars: ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_REGION'], file: 'lib/integrations/step-functions.ts',
+      setupNote: 'aws stepfunctions get-execution-history --execution-arn arn:aws:states:...',
+    },
+    {
+      id: 'databricks', group: 'orchestration', icon: '🧱', name: 'Databricks Workflows',
+      status: env('DATABRICKS_HOST') ? 'connected' : 'disabled',
+      description: 'Job run context, cluster events, Unity Catalog lineage (similar to Dagster asset graph).',
+      dataProvided: ['Jobs API: run status and logs', 'Cluster event log: spot preemption / OOM', 'Unity Catalog lineage graph (if enabled)', 'ACCOUNT_USAGE.QUERY_HISTORY for contention'],
+      envVars: ['DATABRICKS_HOST', 'DATABRICKS_TOKEN'], file: 'lib/integrations/databricks.ts',
+      setupNote: 'GET /api/2.1/jobs/runs/get?run_id={run_id} — Databricks REST API',
     },
     {
       id: 'prefect', group: 'orchestration', icon: '🌀', name: 'Prefect',
@@ -199,94 +274,83 @@ function getIntegrationStatus(): Integration[] {
       description: 'Flow run context, task state, deployment history.',
       dataProvided: ['Flow run logs and state', 'Task-level error details', 'Deployment version context'],
       envVars: ['PREFECT_API_URL', 'PREFECT_API_KEY'], file: 'lib/integrations/prefect.ts',
-      setupNote: 'Prefect Cloud: GET /api/flow_runs/{id}/logs',
+    },
+    {
+      id: 'dbt-cloud-jobs', group: 'orchestration', icon: '🔄', name: 'dbt Cloud (Scheduler)',
+      status: env('DBT_CLOUD_API_KEY') ? 'connected' : 'disabled',
+      description: 'dbt Cloud has its own scheduler. Job run details, model test failures, source freshness.',
+      dataProvided: ['Run-level status + logs', 'Model-level test failures', 'Source freshness results', 'Webhook: dbt Cloud sends failure events'],
+      envVars: ['DBT_CLOUD_API_KEY', 'DBT_CLOUD_ACCOUNT_ID'], file: 'lib/integrations/dbt-cloud.ts',
+      setupNote: 'GET /api/v2/accounts/{id}/runs/{run_id}/ + webhook on job failure',
     },
     // Ingestion
     {
       id: 'fivetran', group: 'ingestion', icon: '🔌', name: 'Fivetran',
       status: env('FIVETRAN_API_KEY') ? 'connected' : 'simulated',
-      description: 'Connector sync status, row counts, schema changes, silent failures. Community-maintained MCP (self-hosted).',
-      dataProvided: ['get_connection_details: last sync + rows loaded', 'Detect 0-row silent SUCCESS failures', 'Schema change history via get_connection_schema_config', 'sync_connection: trigger re-sync when confirmed safe'],
+      description: 'Connector sync status, row counts, silent failures. Community MCP (self-hosted only).',
+      dataProvided: ['get_connection_details: last sync + rows loaded', '0-row silent SUCCESS detection', 'Schema change history', 'sync_connection: trigger re-sync'],
       envVars: ['FIVETRAN_API_KEY', 'FIVETRAN_API_SECRET'], file: 'lib/integrations/fivetran.ts',
       setupNote: '⚠️ SELF-HOSTED: uvx --from git+https://github.com/fivetran/fivetran-mcp fivetran-mcp',
     },
     {
       id: 'airbyte', group: 'ingestion', icon: '🌊', name: 'Airbyte',
       status: env('AIRBYTE_API_KEY') ? 'connected' : 'disabled',
-      description: 'Connection sync status, schema drift, catalog changes.',
-      dataProvided: ['Sync job status and logs', 'Schema change notifications', 'Source/destination connection health'],
+      description: 'Connection sync status, schema drift.',
+      dataProvided: ['Sync job status and logs', 'Schema change notifications', 'Source/destination health'],
       envVars: ['AIRBYTE_API_URL', 'AIRBYTE_API_KEY'], file: 'lib/integrations/airbyte.ts',
     },
     // Transformation
     {
       id: 'snowflake', group: 'transformation', icon: '❄️', name: 'Snowflake',
       status: env('SNOWFLAKE_ACCOUNT') ? 'connected' : 'simulated',
-      description: 'Query history, warehouse utilization, concurrent job detection, data freshness.',
-      dataProvided: ['Query execution history', 'Warehouse credit consumption', 'Concurrent query contention detection', 'Table row count / freshness checks'],
+      description: 'Query history, warehouse utilization, concurrent job contention.',
+      dataProvided: ['QUERY_HISTORY: concurrent queries (contention detection)', 'Warehouse credit consumption', 'Table freshness checks', 'ACCOUNT_USAGE for deep analysis'],
       envVars: ['SNOWFLAKE_ACCOUNT', 'SNOWFLAKE_USER', 'SNOWFLAKE_PASSWORD', 'SNOWFLAKE_WAREHOUSE'], file: 'lib/integrations/snowflake.ts',
-      setupNote: 'SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY — gold mine for contention',
-    },
-    {
-      id: 'dbt-cloud', group: 'transformation', icon: '🔄', name: 'dbt Cloud',
-      status: env('DBT_CLOUD_API_KEY') ? 'connected' : 'disabled',
-      description: 'Job run details, model test results, lineage, compilation errors.',
-      dataProvided: ['Job run status and logs', 'Model-level test failures', 'Source freshness results', 'Lineage graph for impact analysis'],
-      envVars: ['DBT_CLOUD_API_KEY', 'DBT_CLOUD_ACCOUNT_ID'], file: 'lib/integrations/dbt-cloud.ts',
-      setupNote: 'GET /api/v2/accounts/{account_id}/runs/{run_id}/ — includes model-level test results',
-    },
-    {
-      id: 'snowflake-cortex', group: 'transformation', icon: '🧠', name: 'Snowflake Cortex',
-      status: env('SNOWFLAKE_ACCOUNT') ? 'connected' : 'disabled',
-      description: 'Run SQL anomaly detection and data quality checks directly in Snowflake.',
-      dataProvided: ['Anomaly detection on row counts / null rates', 'Semantic search over error messages in Snowflake', 'LLM-powered SQL generation for freshness checks'],
-      envVars: ['SNOWFLAKE_ACCOUNT (same as Snowflake)'], file: 'lib/integrations/snowflake.ts',
-      setupNote: 'SELECT SNOWFLAKE.CORTEX.COMPLETE(...) — runs in your Snowflake account, zero data egress',
     },
     // Knowledge
     {
+      id: 'github', group: 'knowledge', icon: '🐙', name: 'GitHub',
+      status: env('GITHUB_TOKEN') ? 'connected' : 'simulated',
+      description: 'Recent commits, PRs, dbt sources.yml for lineage mapping.',
+      dataProvided: ['Real commit history + PR diffs', 'dbt sources.yml: maps Fivetran connectors to models', 'File-level blame for breaking changes', 'GitHub Actions logs (same token)'],
+      envVars: ['GITHUB_TOKEN', 'GITHUB_REPO_OWNER', 'GITHUB_REPO_NAME'], file: 'lib/integrations/github.ts',
+    },
+    {
       id: 'confluence', group: 'knowledge', icon: '📖', name: 'Confluence',
       status: env('CONFLUENCE_BASE_URL') ? 'connected' : 'disabled',
-      description: 'Search external team runbooks and incident post-mortems alongside internal ones.',
-      dataProvided: ['Fan-out runbook search to Confluence spaces', 'Merged and re-ranked results', 'Auto-improving: smarter as team updates docs'],
+      description: 'Fan out runbook search to Confluence spaces.',
+      dataProvided: ['Runbook search via CQL', 'Architecture diagrams', 'Incident post-mortems'],
       envVars: ['CONFLUENCE_BASE_URL', 'CONFLUENCE_TOKEN', 'CONFLUENCE_SPACE_KEY'], file: 'lib/integrations/confluence.ts',
     },
     {
       id: 'notion', group: 'knowledge', icon: '📝', name: 'Notion',
       status: env('NOTION_API_KEY') ? 'connected' : 'disabled',
       description: 'Pull runbooks and incident post-mortems from Notion databases.',
-      dataProvided: ['Runbook search in Notion databases', 'Incident history from Notion tables', 'On-call rotation info'],
+      dataProvided: ['Runbook search', 'Incident history', 'On-call rotation info'],
       envVars: ['NOTION_API_KEY', 'NOTION_DATABASE_ID'], file: 'lib/integrations/notion.ts',
-      setupNote: 'POST https://api.notion.com/v1/databases/{id}/query — same pattern as Confluence',
-    },
-    {
-      id: 'github', group: 'knowledge', icon: '🐙', name: 'GitHub',
-      status: env('GITHUB_TOKEN') ? 'connected' : 'simulated',
-      description: 'Recent commits and PRs. Finds the code change that caused the failure.',
-      dataProvided: ['Real commit history', 'PR diffs and merge timestamps', 'Author context', 'File-level blame'],
-      envVars: ['GITHUB_TOKEN'], file: 'lib/integrations/github.ts',
     },
     // Alerting
     {
       id: 'slack', group: 'alerting', icon: '💬', name: 'Slack',
       status: env('SLACK_WEBHOOK_URL') ? 'connected' : 'disabled',
-      description: 'Post triage reports to #data-alerts automatically on failure.',
-      dataProvided: ['Auto-post on Dagster run failure', 'Manual "Share to Slack" from triage UI', 'Formatted report with remediation steps'],
+      description: 'Auto-post triage reports to #data-alerts.',
+      dataProvided: ['Auto-post on any failure webhook', 'Share to Slack from triage UI', 'Formatted report with remediation steps'],
       envVars: ['SLACK_WEBHOOK_URL'], file: 'lib/integrations/slack.ts',
     },
     {
       id: 'stripe', group: 'alerting', icon: '💳', name: 'Stripe',
       status: env('STRIPE_API_KEY') ? 'connected' : 'disabled',
-      description: 'Payment pipeline context — revenue impact of data failures, payment status checks. Official hosted MCP.',
-      dataProvided: ['Revenue impact during data outage (how many payments affected?)', 'Payment intent / subscription status checks', 'Connect to existing Stripe monitoring'],
-      envVars: ['STRIPE_API_KEY (restricted key)'], file: 'lib/integrations/stripe.ts',
+      description: 'Revenue impact of data failures. Official hosted MCP.',
+      dataProvided: ['Revenue during data outage window', 'Payment intent status', 'Connect to existing Stripe monitoring'],
+      envVars: ['STRIPE_API_KEY (restricted)'], file: 'lib/integrations/stripe.ts',
       docsUrl: 'https://docs.stripe.com/mcp',
-      setupNote: '✅ HOSTED: mcp.stripe.com (OAuth or Bearer restricted key)',
+      setupNote: '✅ HOSTED MCP: mcp.stripe.com',
     },
     {
       id: 'pagerduty', group: 'alerting', icon: '🔔', name: 'PagerDuty',
       status: env('PAGERDUTY_API_KEY') ? 'connected' : 'disabled',
-      description: 'Auto-page on High confidence failures, check on-call schedule.',
-      dataProvided: ['Auto-trigger incident on High confidence', 'Check who is on-call before escalating', 'Link triage report to incident'],
+      description: 'Auto-page on High confidence failures.',
+      dataProvided: ['Auto-trigger incident on High confidence', 'Check on-call before escalating', 'Link triage report to incident'],
       envVars: ['PAGERDUTY_API_KEY', 'PAGERDUTY_SERVICE_ID'], file: 'lib/integrations/pagerduty.ts',
     },
   ];
@@ -306,10 +370,7 @@ function IntegrationCard(props: Integration) {
           <div className="flex items-center gap-2 mb-1">
             <h3 className="text-sm font-semibold text-zinc-200">{name}</h3>
             <StatusBadge status={status} />
-            {docsUrl && (
-              <a href={docsUrl} target="_blank" rel="noopener noreferrer"
-                className="ml-auto text-xs text-zinc-700 hover:text-zinc-400 transition">docs →</a>
-            )}
+            {docsUrl && <a href={docsUrl} target="_blank" rel="noopener noreferrer" className="ml-auto text-xs text-zinc-700 hover:text-zinc-400 transition">docs →</a>}
           </div>
           <p className="text-xs text-zinc-500 mb-2">{description}</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -329,9 +390,7 @@ function IntegrationCard(props: Integration) {
                 </div>
               ))}
               <p className="text-xs text-zinc-700 mt-0.5">→ <code className="font-mono">{file}</code></p>
-              {setupNote && status !== 'connected' && (
-                <p className="text-xs text-zinc-600 italic mt-0.5">{setupNote}</p>
-              )}
+              {setupNote && status !== 'connected' && <p className="text-xs text-zinc-600 italic mt-0.5">{setupNote}</p>}
             </div>
           </div>
         </div>
