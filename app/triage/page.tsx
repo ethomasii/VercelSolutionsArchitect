@@ -745,21 +745,43 @@ function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportTex
 
     const derived: ProposedAction[] = [];
 
-    // Code regression with a smoking-gun PR → offer to revert or fix
-    if (causePR && (ft === 'code_regression' || ft === 'schema_mismatch')) {
-      derived.push({
-        id: 'create_pr',
-        label: `Open PR: revert "${causePR.message?.slice(0, 50)}"`,
-        description: `Revert the config/code change from ${causePR.sha?.slice(0,7)} that appears to have caused this failure.`,
-        risk: 'low',
-        actionConfidence: 'High',
-        requiresApproval: true,
-        params: { sha: causePR.sha ?? '', message: causePR.message ?? '' },
-      });
+    // Schema mismatch with column rename pattern → propose fix PR
+    if (ft === 'schema_mismatch') {
+      const signals = ((classifyOut as { keySignals?: string[] })?.keySignals ?? []).join(' ').toLowerCase();
+      // Extract "column 'X' does not exist" and "renamed to 'Y'" patterns
+      const oldColMatch = signals.match(/column ["']?([a-z_]+)["']?[^a-z_].*(?:does not exist|not found)/);
+      const newColMatch = signals.match(/renamed? to ["']?([a-z_]+)["']?/);
+      const stackFile = (classifyOut as { stackTrace?: { filePath?: string } })?.stackTrace?.filePath;
+
+      if (oldColMatch || stackFile) {
+        const oldCol = oldColMatch?.[1] ?? 'old_column';
+        const newCol = newColMatch?.[1] ?? 'new_column';
+        // Use file from stackTrace if available, otherwise the known demo file
+        const fixFile = stackFile ?? 'demo/fct_customer_orders.sql';
+
+        rootCauseNote = rootCauseNote ?? `Column rename: "${oldCol}" was renamed to "${newCol}" but not all downstream refs were updated. The fix is deterministic.`;
+        derived.push({
+          id: 'create_pr',
+          label: `Fix column ref: ${oldCol} → ${newCol}`,
+          description: `Update ${fixFile}: change c.${oldCol} to c.${newCol} to match the upstream rename.`,
+          risk: 'low',
+          actionConfidence: 'High',
+          requiresApproval: true,
+          params: {
+            filePath: fixFile,
+            oldText: `c.${oldCol},`,
+            newText: `c.${newCol},`,
+            branchName: `dispatch/fix-${newCol}-ref`,
+            prTitle: `fix: update ${oldCol} → ${newCol} in ${fixFile.split('/').pop()}`,
+            prBody: `## Dispatch Auto-Fix\n\nColumn \`${oldCol}\` was renamed to \`${newCol}\` but \`${fixFile}\` was not updated.\n\n**Fix:** \`c.${oldCol},\` → \`c.${newCol},\``,
+            repoInstance: 'dbt',
+          },
+        });
+      }
     }
 
-    // Network timeout with recent batch size increase → revert config
-    if ((ft === 'network_timeout' || ft === 'code_regression') && causePR?.message?.toLowerCase().match(/batch|chunk|size|parallel/)) {
+    // Code regression / network timeout with batch size change → revert config
+    if ((ft === 'code_regression' || ft === 'network_timeout') && causePR?.message?.toLowerCase().match(/batch|chunk|size|parallel/)) {
       rootCauseNote = rootCauseNote ?? 'Recent batch size or parallelism change may have caused API rate limiting — the config change is likely the root cause.';
       // Only propose create_pr if we have a commit SHA to look up the actual change
       if (causePR?.sha) {
