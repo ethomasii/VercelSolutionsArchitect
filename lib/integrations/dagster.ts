@@ -291,7 +291,7 @@ export async function getStepFailureDetails(
     ? `https://${creds.org}.dagster.cloud/${creds.deploymentName}/graphql`
     : `https://dagster.cloud/graphql`;
 
-  const query = `query RunLogs($runId: String!) {
+  const query = `query RunLogs($runId: ID!) {
     logsForRun(runId: $runId) {
       ... on EventConnection {
         events {

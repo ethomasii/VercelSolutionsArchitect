@@ -292,9 +292,13 @@ export async function POST(req: Request) {
       }, { status: 501 });
     }
 
-    case 'open_dashboard': {
+    case 'open_dashboard':
+    case 'custom': {
+      // custom/open_dashboard: informational action — return the URL or description
       const url = params.url;
-      return Response.json({ ok: true, url, message: 'Open this URL in your browser' });
+      const description = params.description;
+      if (url) return Response.json({ ok: true, url, message: 'Open this URL in your browser' });
+      return Response.json({ ok: true, message: description ?? 'See description for manual steps' });
     }
 
     default:

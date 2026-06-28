@@ -389,21 +389,24 @@ Always include:
 - Whether actions address root cause or just restart the symptom
 
 Action types:
-- "rerun_dagster": ONLY after root cause is addressed — retrying before fixing root cause wastes time
-- "trigger_fivetran_sync": upstream_data_missing + Fivetran identified as root cause
-- "create_pr": code regression where the PR IS the root cause (not a symptom)
-  Include: filePath (from stackTrace), oldText, newText, branchName, prTitle, prBody, repoInstance
+- "rerun_dagster": re-execute from failed step (AFTER root cause addressed)
+- "trigger_fivetran_sync": upstream_data_missing + Fivetran identified
+- "create_pr": code regression where the fix is deterministic (exact file + change known)
+- "open_dashboard": navigate to a relevant URL (Dagster UI, GitHub commit, vendor status)
+  Use this instead of "custom" — always prefer open_dashboard with params.url set
 - "create_jira_ticket": any High confidence failure worth tracking
-- "create_slack_alert": always useful
+- "create_slack_alert": always useful to notify the team
 - "mark_resolved": when pattern is "wait and it resolves"
-- "open_dashboard": link to relevant vendor dashboard`,
+
+NEVER use "custom" as an action id. Use "open_dashboard" with params.url for navigation actions.
+For the Dagster UI traceback: use open_dashboard with url pointing to the run logs.
+For GitHub commits: use open_dashboard with the commit URL.`,
     inputSchema: z.object({
       failureType: z.string(),
       affectedPipeline: z.string(),
       confidence: z.enum(['High', 'Medium', 'Low']),
       actions: z.array(z.object({
-        id: z.enum(['rerun_dagster', 'trigger_fivetran_sync', 'create_jira_ticket', 'create_slack_alert', 'mark_resolved', 'open_dashboard', 'create_pr', 'custom']),
-        label: z.string().describe('Short button label, e.g. "Trigger Fivetran re-sync"'),
+        id: z.enum(['rerun_dagster', 'trigger_fivetran_sync', 'create_jira_ticket', 'create_slack_alert', 'mark_resolved', 'open_dashboard', 'create_pr', 'custom']),        label: z.string().describe('Short button label, e.g. "Trigger Fivetran re-sync"'),
         description: z.string().describe('One sentence: what this does and why'),
         risk: z.enum(['none', 'low', 'medium']),
         actionConfidence: z.enum(['High', 'Medium', 'Low']).describe('How confident you are this fixes the issue'),

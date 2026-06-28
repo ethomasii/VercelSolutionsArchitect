@@ -666,6 +666,19 @@ function ActionsPanel({ actions, rootCauseNote, pipelineName, reportText }: {
                     );
                   }
 
+                  // open_dashboard and custom: show as a link or info, not an execute button
+                  if (action.id === 'open_dashboard' || action.id === 'custom') {
+                    if (action.params?.url) {
+                      return (
+                        <a href={action.params.url} target="_blank" rel="noopener noreferrer"
+                          className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-200">
+                          Open ↗
+                        </a>
+                      );
+                    }
+                    return <span className="text-xs text-zinc-600 italic">Manual step</span>;
+                  }
+
                   return (
                     <button
                       onClick={() => execute(action)}
@@ -682,8 +695,7 @@ function ActionsPanel({ actions, rootCauseNote, pipelineName, reportText }: {
                         </span>
                       ) : action.requiresApproval ? 'Execute ▶' : 'Run'}
                     </button>
-                  );
-                })()}
+                  );                })()}
               </div>
             </div>
           );
