@@ -95,83 +95,52 @@ Please paste the error log manually, or configure Dagster credentials in /settin
     ? `\nGit commit: ${run.commitHash}${run.repoUrl ? `\nRepo: ${run.repoUrl}` : ''}`
     : '';
 
-  // Upstream context section
-  let upstreamSection = '';
-  if (upstream && upstream.source === 'live') {
-    const recurringNote = upstream.isRecurring
-      ? `⚠️  This job has failed ${upstream.priorFailures} times recently — likely a recurring issue`
-      : `First or occasional failure (${upstream.priorFailures} prior failures in recent runs)`;
+  const recurringFailureNote = upstream?.isRecurring
+    ? `⚠️ RECURRING: ${upstream.priorFailures}+ similar failures recently — systematic issue`
+    : '';
 
-    const recentRunsStr = upstream.recentRuns.map(r =>
-      `  ${r.runId.slice(0, 8)}... ${r.status} ${r.startTime ? `at ${r.startTime}` : ''}`
-    ).join('\n') || '  No recent runs found';
-
-    const failedAssetsStr = upstream.failedAssets.length > 0
-      ? upstream.failedAssets.map(a =>
-          `  [${a.key.join('.')}] last failed: ${a.lastFailedAt}`
-        ).join('\n')
-      : '  No other assets failed recently';
-
-    upstreamSection = `
-UPSTREAM CONTEXT (asset graph + prior runs):
-${recurringNote}
-
-Recent runs of ${run.jobName ?? 'this job'}:
-${recentRunsStr}
-
-Other assets that failed in the last 6h (potential upstream causes):
-${failedAssetsStr}
-
-NOTE: Full upstream dependency traversal (walking asset deps recursively) requires
-multiple get_asset calls per dep. This shows top-level health signals only.
-For complete lineage: open the Dagster asset graph UI or use the Dagster MCP
-get_asset tool with each dependency key.`;
-  }
-
-  // Extract failed step name from error events
+  // Extract failed step name - try stepKey first, then parse from message
   const failedStepKey = errorEvents.find(e => e.stepKey)?.stepKey
     ?? logs.events.find(e => e.eventType === 'STEP_FAILURE')?.stepKey
+    ?? (() => {
+      // Extract from message: "Execution of step "enriched_data.process_chunk[9]" failed."
+      const stepMsg = logs.events.find(e => e.eventType === 'STEP_FAILURE')?.message ?? '';
+      const match = stepMsg.match(/step "([^"]+)"/);
+      return match?.[1] ?? null;
+    })()
     ?? run.failureStep ?? run.assetKey ?? 'unknown';
 
-  // Extract the key error message from STEP_FAILURE events
+  // Keep failure events concise — only the key failure, not all 30 events
   const stepFailureMessage = errorEvents
-    .filter(e => e.eventType === 'STEP_FAILURE' || e.eventType === 'RUN_FAILURE')
+    .filter(e => e.eventType === 'STEP_FAILURE' || e.eventType === 'RUN_FAILURE' || e.eventType === 'ASSET_FAILED_TO_MATERIALIZE')
     .map(e => `  ${e.eventType}${e.stepKey ? ` [${e.stepKey}]` : ''}: ${e.message}`)
-    .join('\n') || '  No explicit failure events captured (check subprocess logs in Dagster UI)';
-
-  const recurringFailureNote = upstream?.isRecurring
-    ? `⚠️ RECURRING: This job has failed ${upstream.priorFailures}+ times recently — systematic issue, not transient`
-    : '';
+    .join('\n') || '  See Dagster UI → Runs → ' + runId + ' → ' + failedStepKey + ' → Logs tab for full Python traceback.';
 
   const enrichedPrompt = `Triage pipeline failure for Dagster run: ${runId}
 
-ORCHESTRATOR CONTEXT (live from ${run.source === 'live' ? 'data-eng-prod' : 'dagster'} via Dagster MCP):
-- Job: ${run.jobName ?? 'unknown'}
-- Status: ${run.status ?? 'FAILURE'}
+ORCHESTRATOR CONTEXT (${run.source === 'live' ? 'live from data-eng-prod' : 'Dagster'} via MCP):
+- Job: ${run.jobName ?? 'unknown'} | Status: FAILURE
 - Failed step: ${failedStepKey}
-- Failure type: ${run.failureDescription ?? 'STEP_FAILURE'}
-- Started: ${run.startTime ?? 'unknown'}
-- Ended: ${run.endTime ?? 'unknown'}${commitInfo}
+- Failure type: ${run.failureDescription ?? 'STEP_FAILURE'} (exhausted all retries — not transient)
+- Git commit: ${run.commitHash ?? 'unknown'}${run.repoUrl ? `\n- Repo: ${run.repoUrl}` : ''}
 ${recurringFailureNote ? `\n${recurringFailureNote}` : ''}
 
-FAILURE EVENTS:
+FAILURE:
 ${stepFailureMessage}
 
-RETRY CONTEXT:
-This run exhausted all retries (step-level + run-level). The failure is not transient.
-${upstream?.isRecurring ? `This job has failed ${upstream.priorFailures} times recently — look for a systematic issue in the data or external API.` : ''}
-${codeSnippet}
-${upstreamSection}
-NOTE ON MISSING PYTHON TRACEBACK:
-The Dagster event log contains step lifecycle events but not subprocess stdout/stderr.
-The full Python exception is in the Dagster UI: Runs → ${runId} → ${failedStepKey} → Logs.
-For this run, the failure is in step "${failedStepKey}" which calls an external API.
+WHAT THE CODE DOES (${failedStepKey}):
+${codeSnippet || `Step calls an external API in a loop. Check: API health, data quality in chunk ${failedStepKey.match(/\[(\d+)\]/)?.[1] ?? 'N'}, network connectivity.`}
 
-SOURCE: Live data from Dagster MCP (${run.source})
-Repo: ${repoUrl || 'dagster-io/hooli-data-eng-pipelines (public)'}`;
+UPSTREAM CONTEXT:
+${upstream?.isRecurring
+  ? `⚠️ RECURRING FAILURE — ${upstream.priorFailures} similar failures recently`
+  : `Recent job runs: ${upstream?.recentRuns?.slice(0,3).map(r => `${r.runId.slice(0,8)} ${r.status}`).join(', ') || 'no data'}`}
+${upstream?.failedAssets?.length ? `Recently failed assets: ${upstream.failedAssets.map(a => a.key.join('.')).join(', ')}` : 'No other assets failed recently'}
+
+NOTE: Full Python traceback in Dagster UI → Runs → ${runId.slice(0,8)} → ${failedStepKey} → Logs tab.`;
 
   return {
-    runId, orchestrator: 'dagster', failedAsset: run.jobName ?? 'unknown',
+    runId, orchestrator: 'dagster', failedAsset: `${run.jobName ?? 'unknown'}/${failedStepKey}`,
     startedAt: run.startTime ?? new Date().toISOString(),
     failedAt: run.endTime ?? new Date().toISOString(),
     enrichedPrompt, source: 'dagster_api',
