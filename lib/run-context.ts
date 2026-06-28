@@ -507,24 +507,24 @@ FAILED JOBS AND STEPS:
     ✗ dbt test --select marts.customers+ (skipped due to prior failure)
 
 FAILURE OUTPUT:
-  Database Error in model fct_customer_orders (models/marts/customers/fct_customer_orders.sql)
-    column "customer_tier" of relation "dim_customers" does not exist
-    LINE 47: SELECT c.customer_tier, SUM(o.order_amount) as revenue
-    compiled SQL: target/compiled/dbt_project/models/marts/fct_customer_orders.sql
+  Database Error in model fct_customer_orders (demo/fct_customer_orders.sql)
+    column "customer_segment" of relation "dim_customers" does not exist
+    The column was renamed to "customer_tier" in PR #247 but this file was not updated.
 
 LINEAGE CONTEXT (from dbt manifest + sources.yml):
-  fct_customer_orders
+  fct_customer_orders (demo/fct_customer_orders.sql)
     ← dim_customers (dbt model)
        ← stg_customers (dbt staging)
           ← source('salesforce', 'accounts') → Fivetran Salesforce connector
 
-NOTE: The failing model references "customer_tier" which was introduced in PR #247
-(merged 4 hours ago, commit a4f7c2e). The PR renamed customer_segment → customer_tier
-in dim_customers but did NOT update fct_customer_orders.
+CODE FIX CONTEXT:
+  File: demo/fct_customer_orders.sql (exists in dagster-io/hooli-data-eng-pipelines)
+  Line 5: c.customer_segment,  ← must be changed to c.customer_tier
+  Fix: change "c.customer_segment," to "c.customer_tier," on line 5.
+  Use repoInstance: "dbt" for the create_pr action.
 
 RECENT FIVETRAN SYNC STATUS:
-  fivetran_salesforce_sync: SUCCEEDED 2h ago, 3,201 rows loaded (normal)
-  (Fivetran is NOT the issue — this is a code change problem)
+  fivetran_salesforce_sync: SUCCEEDED 2h ago (not the issue)
 
 Pipeline: dbt_customers_transform (orchestrator: GitHub Actions)
 Run ID: ${runId}`;
