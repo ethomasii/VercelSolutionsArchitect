@@ -165,6 +165,81 @@ export async function getRunStatus(
   }
 }
 
+// Walk the asset graph to find upstream failures.
+// Strategy:
+//   1. Get recent failed runs for the same job (is this a repeat failure?)
+//   2. Get assets with latestFailedToMaterializeTimestamp (upstream failures?)
+//   3. Return context to include in enriched prompt
+//
+// Note: Full graph traversal (deps → upstream deps) requires multiple get_asset calls
+// per node. For now: fetch top-level asset health + recent job run history.
+// With Dagster MCP's asset graph, a deeper traversal would:
+//   - get_asset(key) → asset.definition.dependencies → recursive get_asset calls
+// This is the correct long-term implementation once we add pagination + caching.
+export async function getUpstreamContext(
+  jobName: string,
+  runId: string,
+  instanceName = 'default'
+): Promise<{
+  priorFailures: number;
+  isRecurring: boolean;
+  failedAssets: Array<{ key: string[]; lastFailedAt: string }>;
+  recentRuns: Array<{ runId: string; status: string; startTime: string | null }>;
+  source: 'live' | 'unavailable';
+}> {
+  const creds = await getCredentials(instanceName);
+  if (!creds) return { priorFailures: 0, isRecurring: false, failedAssets: [], recentRuns: [], source: 'unavailable' };
+
+  try {
+    // 1. Recent runs of the same job (last 10) to detect recurring failures
+    const runsData = await callDagsterMCP(creds.token, creds.org, 'list_runs', {
+      deployment_name: creds.deploymentName,
+      limit: 10,
+    }) as { results?: Array<{ runId?: string; status?: string; jobName?: string; startTime?: number }> };
+
+    const jobRuns = (runsData.results ?? [])
+      .filter(r => r.jobName === jobName && r.runId !== runId);
+
+    const priorFailures = jobRuns.filter(r => r.status === 'FAILURE').length;
+
+    // 2. Assets with recent failures — get the first 20 assets and check health
+    const assetsData = await callDagsterMCP(creds.token, creds.org, 'get_assets', {
+      deployment_name: creds.deploymentName,
+      limit: 20,
+    }) as {
+      nodes?: Array<{
+        key?: { path?: string[] };
+        latestFailedToMaterializeTimestamp?: number | null;
+      }>;
+    };
+
+    const recentlyFailed = (assetsData.nodes ?? [])
+      .filter(a =>
+        a.latestFailedToMaterializeTimestamp &&
+        Date.now() - a.latestFailedToMaterializeTimestamp < 6 * 3600 * 1000
+      )
+      .map(a => ({
+        key: a.key?.path ?? [],
+        lastFailedAt: new Date(a.latestFailedToMaterializeTimestamp!).toISOString(),
+      }));
+
+    return {
+      priorFailures,
+      isRecurring: priorFailures >= 2,
+      failedAssets: recentlyFailed,
+      recentRuns: jobRuns.slice(0, 5).map(r => ({
+        runId: r.runId ?? '',
+        status: r.status ?? 'UNKNOWN',
+        startTime: r.startTime ? new Date(r.startTime * 1000).toISOString() : null,
+      })),
+      source: 'live',
+    };
+  } catch (err) {
+    console.warn('[dagster] getUpstreamContext failed:', err);
+    return { priorFailures: 0, isRecurring: false, failedAssets: [], recentRuns: [], source: 'unavailable' };
+  }
+}
+
 export async function getRunLogs(
   runId: string,
   limit = 50,

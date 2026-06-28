@@ -50,7 +50,7 @@ export const SAMPLE_RUN_IDS: Array<{ id: string; label: string; description: str
   },
 ];
 
-import { getRunStatus, getRunLogs } from './integrations/dagster';
+import { getRunStatus, getRunLogs, getUpstreamContext } from './integrations/dagster';
 
 export async function resolveRunId(runId: string): Promise<RunContext | null> {
   const normalized = runId.trim().toLowerCase();
@@ -71,6 +71,11 @@ export async function resolveRunId(runId: string): Promise<RunContext | null> {
 async function fetchRealDagsterRun(runId: string): Promise<RunContext | null> {
   const run = await getRunStatus(runId);
   const logs = await getRunLogs(runId, 30);
+
+  // Walk upstream: check prior runs + recently failed assets
+  const upstream = run.jobName
+    ? await getUpstreamContext(run.jobName, runId)
+    : null;
 
   if (run.source === 'unavailable') {
     return {
@@ -100,6 +105,39 @@ Please paste the error log manually, or configure Dagster credentials in /settin
     ? `\nGit commit: ${run.commitHash}${run.repoUrl ? `\nRepo: ${run.repoUrl}` : ''}`
     : '';
 
+  // Upstream context section
+  let upstreamSection = '';
+  if (upstream && upstream.source === 'live') {
+    const recurringNote = upstream.isRecurring
+      ? `⚠️  This job has failed ${upstream.priorFailures} times recently — likely a recurring issue`
+      : `First or occasional failure (${upstream.priorFailures} prior failures in recent runs)`;
+
+    const recentRunsStr = upstream.recentRuns.map(r =>
+      `  ${r.runId.slice(0, 8)}... ${r.status} ${r.startTime ? `at ${r.startTime}` : ''}`
+    ).join('\n') || '  No recent runs found';
+
+    const failedAssetsStr = upstream.failedAssets.length > 0
+      ? upstream.failedAssets.map(a =>
+          `  [${a.key.join('.')}] last failed: ${a.lastFailedAt}`
+        ).join('\n')
+      : '  No other assets failed recently';
+
+    upstreamSection = `
+UPSTREAM CONTEXT (asset graph + prior runs):
+${recurringNote}
+
+Recent runs of ${run.jobName ?? 'this job'}:
+${recentRunsStr}
+
+Other assets that failed in the last 6h (potential upstream causes):
+${failedAssetsStr}
+
+NOTE: Full upstream dependency traversal (walking asset deps recursively) requires
+multiple get_asset calls per dep. This shows top-level health signals only.
+For complete lineage: open the Dagster asset graph UI or use the Dagster MCP
+get_asset tool with each dependency key.`;
+  }
+
   const enrichedPrompt = `Triage pipeline failure for Dagster run: ${runId}
 
 DAGSTER RUN CONTEXT (live from ${run.source === 'live' ? 'data-eng-prod' : 'dagster'}):
@@ -109,7 +147,7 @@ DAGSTER RUN CONTEXT (live from ${run.source === 'live' ? 'data-eng-prod' : 'dags
 - Failure reason: ${run.failureDescription ?? 'STEP_FAILURE'}
 - Started: ${run.startTime ?? 'unknown'}
 - Ended: ${run.endTime ?? 'unknown'}${commitInfo}
-
+${upstreamSection}
 ERROR LOG EVENTS:
 ${errorEvents.map(e => `  [${e.level}] ${e.eventType}: ${e.message.slice(0, 200)}`).join('\n') || '  No explicit error events found — check stepKey failures below'}
 
