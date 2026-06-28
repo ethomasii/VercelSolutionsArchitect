@@ -60,6 +60,7 @@ type IncidentOutput = {
   totalIncidents?: number; knownFlaky?: boolean; avgResolutionMinutes?: number | null;
   recentIncidents?: Array<{ pipeline_name?: string; occurred_at?: string; resolved_at?: string; resolution_summary?: string; root_cause?: string; resolved_by?: string }>;
   mostCommonResolution?: string;
+  recentUpstreamFailures?: Array<{ pipelineName?: string; failureType?: string; occurredAt?: string; resolutionSummary?: string }>;
 };
 
 type GitOutput = {
@@ -164,6 +165,30 @@ function ToolDetail({ toolName, output }: { toolName: string; output: unknown })
           <div className="rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2">
             <p className="text-xs text-zinc-500 mb-0.5">Most common resolution</p>
             <p className="text-xs text-zinc-300">{o.mostCommonResolution}</p>
+          </div>
+        )}
+
+        {/* Cross-pipeline upstream failures */}
+        {o.recentUpstreamFailures && o.recentUpstreamFailures.length > 0 && (
+          <div className="rounded-lg border border-amber-800/30 bg-amber-950/10 px-3 py-2">
+            <p className="text-xs font-medium text-amber-400 mb-1.5">⚠️ Other pipelines failed recently</p>
+            <div className="space-y-1">
+              {o.recentUpstreamFailures.map((f, i) => {
+                const occurred = f.occurredAt ? new Date(f.occurredAt) : null;
+                const hoursAgo = occurred ? Math.round((Date.now() - occurred.getTime()) / 3600000) : null;
+                return (
+                  <div key={i} className="flex items-center gap-2 text-xs">
+                    <code className="font-mono text-amber-300/80">{f.pipelineName}</code>
+                    <span className="text-zinc-600">{hoursAgo != null ? `${hoursAgo}h ago` : ''}</span>
+                    <span className="text-zinc-700">·</span>
+                    <span className="text-zinc-500">{f.failureType}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-xs text-zinc-700 mt-1.5 italic">
+              With Dagster MCP: traverse asset graph to confirm upstream causality
+            </p>
           </div>
         )}
 

@@ -185,12 +185,36 @@ Critical for identifying known-flaky pipelines and recurring patterns.`,
       // fired 8 times in 90 days and always resolved itself, the recommendation
       // should be "wait 20 minutes" not "page someone." That's institutional
       // knowledge no vendor can provide.
+
+      // Cross-pipeline context: find OTHER pipelines that failed in the same window.
+      // This surfaces upstream failures that caused the current failure
+      // (e.g., fivetran_orders_daily failing 30min before dbt_customers_transform).
+      // With Dagster MCP this would traverse the asset dependency graph instead.
+      const recentUpstreamFailures = pipelineName
+        ? await sql`
+            SELECT DISTINCT pipeline_name, failure_type, occurred_at, resolution_summary
+            FROM incidents
+            WHERE org_id = ${orgId}
+              AND pipeline_name != ${pipelineName}
+              AND occurred_at > now() - interval '6 hours'
+              AND (resolved_at IS NULL OR resolved_at > now() - interval '4 hours')
+            ORDER BY occurred_at DESC
+            LIMIT 5
+          `
+        : [];
+
       return {
         totalIncidents: rows.length,
         knownFlaky,
         avgResolutionMinutes,
         recentIncidents: rows.slice(0, 3),
         mostCommonResolution: rows[0]?.resolution_summary ?? null,
+        recentUpstreamFailures: recentUpstreamFailures.map(r => ({
+          pipelineName: r.pipeline_name,
+          failureType: r.failure_type,
+          occurredAt: r.occurred_at,
+          resolutionSummary: r.resolution_summary,
+        })),
       };
     },
   }),

@@ -195,6 +195,7 @@ function EvalToolSection({ toolOutputs }: { toolOutputs: ToolOutputs }) {
 interface EvalResult {
   id: string;
   name: string;
+  inputLog?: string;
   expectedType: string;
   gotType: string | null;
   confidence: number;
@@ -417,6 +418,14 @@ export default function EvalsPage() {
                       <tr key={`${name}-detail`} className="bg-zinc-900/30">
                         <td colSpan={8} className="px-6 py-4 border-t border-zinc-800/60">
                           <div className="max-w-4xl space-y-4">
+                            {/* Input log */}
+                            {r.inputLog && (
+                              <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+                                <p className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-2">Input Log</p>
+                                <pre className="text-xs font-mono text-zinc-500 whitespace-pre-wrap leading-relaxed overflow-x-auto max-h-40 overflow-y-auto">{r.inputLog}</pre>
+                              </div>
+                            )}
+
                             {/* Tool outputs */}
                             {r.toolOutputs && <EvalToolSection toolOutputs={r.toolOutputs} />}
 

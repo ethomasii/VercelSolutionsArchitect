@@ -145,6 +145,7 @@ export async function GET() {
             data: {
               id: evalCase.id,
               name: evalCase.name,
+              inputLog: evalCase.input_log,
               expectedType: evalCase.expected_failure_type,
               gotType: gotFailureType,
               confidence: Math.round(confidence * 100),
@@ -168,6 +169,7 @@ export async function GET() {
             data: {
               id: evalCase.id,
               name: evalCase.name,
+              inputLog: evalCase.input_log,
               expectedType: evalCase.expected_failure_type,
               gotType: null,
               confidence: 0,

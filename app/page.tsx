@@ -92,6 +92,12 @@ export default function HomePage() {
           >
             View Evals
           </Link>
+          <Link
+            href="/integrations"
+            className="text-sm font-medium text-zinc-600 transition hover:text-zinc-400"
+          >
+            Integrations →
+          </Link>
         </div>
       </div>
 
