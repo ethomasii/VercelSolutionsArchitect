@@ -47,11 +47,25 @@ export async function resolveRunId(runId: string): Promise<RunContext | null> {
 async function fetchRealDagsterRun(runId: string): Promise<RunContext | null> {
   const run = await getRunStatus(runId);
   const logs = await getRunLogs(runId, 30);
+  const upstream = run.jobName ? await getUpstreamContext(run.jobName, runId) : null;
 
-  // Walk upstream: check prior runs + recently failed assets
-  const upstream = run.jobName
-    ? await getUpstreamContext(run.jobName, runId)
-    : null;
+  // For known public repos (like hooli), read actual source code without auth
+  let codeSnippet = '';
+  const repoUrl = run.repoUrl ?? '';
+  if (repoUrl.includes('hooli-data-eng-pipelines') || repoUrl.includes('dagster-io/hooli')) {
+    try {
+      const res = await fetch(
+        'https://api.github.com/repos/dagster-io/hooli-data-eng-pipelines/contents/hooli-batch-enrichment/src/hooli_batch_enrichment/assets.py',
+        { headers: { 'Accept': 'application/vnd.github+json' }, signal: AbortSignal.timeout(5000) }
+      );
+      if (res.ok) {
+        const data = await res.json() as { content?: string };
+        const content = data.content ? Buffer.from(data.content, 'base64').toString('utf8') : '';
+        const start = content.indexOf('@op(out=DynamicOut())');
+        if (start >= 0) codeSnippet = '\nACTUAL SOURCE CODE (hooli-data-eng-pipelines, public):\n' + content.slice(start, start + 900);
+      }
+    } catch { /* non-critical */ }
+  }
 
   if (run.source === 'unavailable') {
     return {
@@ -122,6 +136,8 @@ DAGSTER RUN CONTEXT (live from ${run.source === 'live' ? 'data-eng-prod' : 'dags
 - Failed step: ${run.failureStep ?? run.assetKey ?? 'unknown'}
 - Failure reason: ${run.failureDescription ?? 'STEP_FAILURE'}
 - Started: ${run.startTime ?? 'unknown'}
+- Ended: ${run.endTime ?? 'unknown'}${commitInfo}
+${codeSnippet}
 - Ended: ${run.endTime ?? 'unknown'}${commitInfo}
 ${upstreamSection}
 ERROR LOG EVENTS:

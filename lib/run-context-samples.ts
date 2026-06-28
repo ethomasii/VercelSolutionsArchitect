@@ -25,8 +25,8 @@ export const SAMPLE_RUN_IDS: Array<{ id: string; label: string; description: str
   },
   {
     id: 'a227a58f-192e-4491-a963-04d713b07d89',
-    label: 'hooli data-eng-prod: run_etl_pipeline FAILURE (enriched_data.process_chunk[9])',
-    description: 'Real Dagster run from hooli/data-eng-prod. batch_enrichment code location. Retried and still failed. Git commit: 2cc6f2c.',
+    label: 'hooli data-eng-prod: run_etl_pipeline FAILURE — enriched_data.process_chunk[9] exhausted retries',
+    description: 'Real Dagster run from hooli/data-eng-prod. process_chunk calls EnrichmentAPI.get_order_details() — chunk #9 failed 2× step retries + 1× run retry. Public source code read directly from dagster-io/hooli-data-eng-pipelines.',
   },
   {
     id: 'gh-run-dbt-failure',
