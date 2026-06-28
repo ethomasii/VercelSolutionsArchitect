@@ -11,7 +11,18 @@ import { searchRunbooks as searchConfluence } from './integrations/confluence';
 export const dispatchTools = {
   classifyFailure: tool({
     description: `Classify the pipeline failure type and extract key signals from
-the log text. ALWAYS call this first before any other tool.`,
+the log text. ALWAYS call this first before any other tool.
+
+Classification guidance for ambiguous cases:
+- "does not exist or not authorized" with a named User/Role → permission_denied
+  (Snowflake 002003/42S02 can mean either missing object OR access denied;
+  when a service account (e.g., DISPATCH_SVC_ACCT, svc_user) and Role are present,
+  lean toward permission_denied)
+- "Access Denied", "insufficient privileges", "403 Forbidden" → permission_denied
+- "0 rows loaded", "No new data", "connector SYNCING" → upstream_data_missing
+- "column X does not exist", "KeyError", "schema change" → schema_mismatch
+- "ref is undefined", "not found" in dbt compile output → dbt_compilation_error
+- "timeout", "cluster auto-suspend", "out of memory" → resource_exhaustion`,
     inputSchema: z.object({
       failureType: z.enum([
         'upstream_data_missing',
@@ -47,28 +58,52 @@ Call after classifyFailure. Returns matching runbook entries with remediation st
     execute: async ({ failureType, pipelineName, keywords }) => {
       const orgId = 'default';
 
-      // Primary: exact match on failure_type — this is fast and reliable since
-      // classifyFailure is already 90%+ accurate. The failure_type is the key
-      // signal; full-text search over AI-extracted keywords produces false negatives
-      // because plainto_tsquery requires ALL terms (AND semantics) to appear in the
-      // runbook, and terms like "dim_customers" or "does not exist" are log-specific,
-      // not runbook-specific.
-      const rows = await sql`
-        SELECT title, content, remediation_steps, last_updated, author,
-               'failure_type_match' as match_reason
-        FROM runbooks
-        WHERE org_id = ${orgId}
-          AND failure_type = ${failureType}
-        ORDER BY last_updated DESC
-        LIMIT 3
-      `;
+      // Extract the first meaningful word from pipeline name as a vendor/tech tag.
+      // e.g. "snowflake_raw_ingestion" → "snowflake", "fivetran_orders_daily" → "fivetran"
+      // Used as a secondary search signal to make retrieval robust against misclassification.
+      const pipelineTag = pipelineName
+        ? pipelineName.split('_')[0].toLowerCase()
+        : null;
 
-      // Fallback: broader text search on just failureType + pipelineName if no exact match
+      // Multi-signal scoring: prefer runbooks that match BOTH failure_type AND
+      // pipeline vendor tag. If classification is wrong (e.g. "does not exist or not
+      // authorized" classified as upstream_data_missing instead of permission_denied),
+      // the pipeline tag match still surfaces the right Snowflake runbook.
+      //
+      // Score:
+      //   failure_type AND pipeline tag match: 15  ← most specific
+      //   pipeline tag match only:             10  ← vendor-specific beats wrong-type match
+      //   failure_type match only:              5  ← generic type match, lowest priority
+      const rows = pipelineTag
+        ? await sql`
+            SELECT title, content, remediation_steps, last_updated, author,
+              (CASE WHEN failure_type = ${failureType} THEN 5 ELSE 0 END +
+               CASE WHEN ${pipelineTag} = ANY(pipeline_tags) THEN 10 ELSE 0 END) AS score
+            FROM runbooks
+            WHERE org_id = ${orgId}
+              AND (
+                failure_type = ${failureType}
+                OR ${pipelineTag} = ANY(pipeline_tags)
+              )
+            ORDER BY score DESC, last_updated DESC
+            LIMIT 3
+          `
+        : await sql`
+            SELECT title, content, remediation_steps, last_updated, author,
+              10 AS score
+            FROM runbooks
+            WHERE org_id = ${orgId}
+              AND failure_type = ${failureType}
+            ORDER BY last_updated DESC
+            LIMIT 3
+          `;
+
+      // Fallback: broader text search if nothing matched above
       const fallbackRows =
         rows.length === 0
           ? await sql`
               SELECT title, content, remediation_steps, last_updated, author,
-                     'text_search' as match_reason
+                1 AS score
               FROM runbooks
               WHERE org_id = ${orgId}
                 AND to_tsvector('english', content || ' ' || title)
@@ -78,7 +113,6 @@ Call after classifyFailure. Returns matching runbook entries with remediation st
             `
           : [];
 
-      // Also query Confluence if configured (returns [] today if not set).
       const confluenceResults = await searchConfluence(failureType, failureType);
 
       const allResults = [
