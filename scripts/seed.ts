@@ -255,6 +255,40 @@ that break enum constraints in our dbt tests.`,
       ]),
       author: 'analytics-eng',
     },
+    {
+      title: 'GitHub Actions dbt Pipeline — Code Regression',
+      failure_type: 'schema_mismatch',
+      pipeline_tags: ['github-actions', 'dbt', 'ci-cd'],
+      content: `dbt workflows triggered by GitHub Actions typically fail immediately after a PR merge.
+The most common cause: a column was renamed in the merged PR but downstream refs were not updated.
+Run "dbt compile" locally to catch these before merging.`,
+      remediation_steps: JSON.stringify([
+        'Check GitHub Actions run logs: which dbt model failed and what was the error?',
+        'Look at the commit that triggered the workflow: git show HEAD --name-only',
+        'Run: dbt compile locally against the failing branch',
+        'Check for renamed models/columns: grep -r "old_name" models/',
+        'Update all downstream ref() calls to use the new name',
+        'Re-run the workflow after pushing the fix commit',
+      ]),
+      author: 'analytics-eng',
+    },
+    {
+      title: 'AWS Step Functions ETL — Permission Denied (Quarterly Rotation)',
+      failure_type: 'permission_denied',
+      pipeline_tags: ['step-functions', 'aws', 'snowflake', 'etl'],
+      content: `The revenue-etl-pipeline uses ETL_SVC_ACCT to load data into PROD.REVENUE in Snowflake.
+IT rotates this account quarterly. This pipeline has failed on March 31, June 30, September 30, December 31.
+Credentials are stored in AWS Secrets Manager (secret: prod/etl-svc-acct) — no code change needed.`,
+      remediation_steps: JSON.stringify([
+        'Check #data-ops for credential rotation announcement',
+        'File IT ticket: "Rotate ETL_SVC_ACCT in Secrets Manager: prod/etl-svc-acct"',
+        'IT updates Secrets Manager — Step Functions reads at runtime, no code change needed',
+        'Test: aws secretsmanager get-secret-value --secret-id prod/etl-svc-acct',
+        'Re-run Step Functions execution from the failed LoadToSnowflake state (not from start)',
+        'Verify PROD.REVENUE.FCT_REVENUE is populated before closing the incident',
+      ]),
+      author: 'data-platform-team',
+    },
   ];
 
   for (const rb of runbooks) {
@@ -407,6 +441,57 @@ that break enum constraints in our dbt tests.`,
       resolution_summary: 'Salesforce maintenance window ran longer than expected. Pipeline resumed automatically.',
       root_cause: 'Salesforce scheduled maintenance window',
       known_flaky: false, resolved_by: 'on-call-bot',
+    },
+
+    // GitHub Actions dbt pipeline incidents
+    {
+      pipeline_name: 'github-actions-dbt-transform', failure_type: 'schema_mismatch',
+      occurred_at: new Date(now.getTime() - 4.5 * 3600000).toISOString(),
+      resolved_at: minutesAfter(new Date(now.getTime() - 4.5 * 3600000).toISOString(), 18),
+      resolution_summary: 'dbt workflow failed after PR #247 renamed customer_segment → customer_tier. Fixed missing ref in fct_customer_orders.',
+      root_cause: 'Code regression: column rename in PR without updating all downstream refs',
+      known_flaky: false, resolved_by: 'alex-p',
+    },
+    {
+      pipeline_name: 'github-actions-dbt-transform', failure_type: 'dbt_test_failure',
+      occurred_at: daysAgo(8), resolved_at: minutesAfter(daysAgo(8), 25),
+      resolution_summary: 'not_null test on order_id failed. Traced to Fivetran loading 0 rows that day.',
+      root_cause: 'Upstream Fivetran silent failure propagated to dbt tests',
+      known_flaky: false, resolved_by: 'marcus-t',
+    },
+
+    // AWS Step Functions ETL incidents
+    {
+      pipeline_name: 'revenue-etl-pipeline', failure_type: 'permission_denied',
+      occurred_at: new Date(now.getTime() - 40 * 60000).toISOString(),
+      resolved_at: null,
+      resolution_summary: null,
+      root_cause: 'Quarterly credential rotation — ETL_SVC_ACCT lost access to PROD.REVENUE',
+      known_flaky: false, resolved_by: null,
+    },
+    {
+      pipeline_name: 'revenue-etl-pipeline', failure_type: 'permission_denied',
+      occurred_at: daysAgo(91),
+      resolved_at: minutesAfter(daysAgo(91), 115),
+      resolution_summary: 'IT rotated ETL_SVC_ACCT credentials as part of quarterly rotation. Updated Snowflake connection secret in Step Functions.',
+      root_cause: 'Quarterly service account credential rotation',
+      known_flaky: false, resolved_by: 'it-team',
+    },
+    {
+      pipeline_name: 'revenue-etl-pipeline', failure_type: 'resource_exhaustion',
+      occurred_at: daysAgo(45), resolved_at: minutesAfter(daysAgo(45), 35),
+      resolution_summary: 'Glue job ran out of DPUs during end-of-month revenue calculation. Increased DPU count from 10 to 20.',
+      root_cause: 'End-of-month data volume spike exceeded Glue job capacity',
+      known_flaky: false, resolved_by: 'data-platform-team',
+    },
+
+    // Databricks incidents
+    {
+      pipeline_name: 'databricks-feature-pipeline', failure_type: 'resource_exhaustion',
+      occurred_at: daysAgo(6), resolved_at: minutesAfter(daysAgo(6), 42),
+      resolution_summary: 'Spot instance preemption during model training run. Switched to on-demand for critical runs.',
+      root_cause: 'AWS spot instance preemption during high-demand period',
+      known_flaky: false, resolved_by: 'ml-platform-team',
     },
   ];
 

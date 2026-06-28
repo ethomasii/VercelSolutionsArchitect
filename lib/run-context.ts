@@ -48,9 +48,20 @@ export const SAMPLE_RUN_IDS: Array<{ id: string; label: string; description: str
     label: 'hooli data-eng-prod: run_etl_pipeline FAILURE (enriched_data.process_chunk[9])',
     description: 'Real Dagster run from hooli/data-eng-prod. batch_enrichment code location. Retried and still failed. Git commit: 2cc6f2c.',
   },
+  {
+    id: 'gh-run-dbt-failure',
+    label: 'GitHub Actions: dbt_transform.yml failed on step "dbt run --select customers+"',
+    description: 'dbt workflow triggered by a merge to main. customer_tier column ref broken 4 hours after the PR merged. Classic "code change caused it" scenario.',
+  },
+  {
+    id: 'sfn-etl-revenue-failure',
+    label: 'AWS Step Functions: revenue-etl-pipeline failed at LoadToSnowflake state',
+    description: 'Step Functions ETL: Extract (S3) → Transform (Glue) → Load (Snowflake). Failed at Load step with Snowflake permission error. Quarterly rotation pattern.',
+  },
 ];
 
 import { getRunStatus, getRunLogs, getUpstreamContext } from './integrations/dagster';
+import { getWorkflowRun } from './integrations/github-actions';
 
 export async function resolveRunId(runId: string): Promise<RunContext | null> {
   const normalized = runId.trim().toLowerCase();
@@ -60,10 +71,20 @@ export async function resolveRunId(runId: string): Promise<RunContext | null> {
   if (normalized.includes('schema-drift')) return buildSchemaDriftContext(runId);
   if (normalized.includes('airflow-dbt')) return buildAirflowDbtContext(runId);
   if (normalized.includes('snowflake-lineage')) return buildSnowflakeLineageContext(runId);
+  if (normalized.includes('gh-run-dbt-failure')) return buildGitHubActionsDbtContext(runId);
+  if (normalized.includes('sfn-etl')) return buildStepFunctionsEtlContext(runId);
 
   // Real Dagster UUID — try live API first
   const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId.trim());
   if (isUUID) return fetchRealDagsterRun(runId.trim());
+
+  // GitHub Actions run ID: numeric, 9-12 digits
+  const isGitHubRunId = /^\d{9,12}$/.test(runId.trim());
+  if (isGitHubRunId) return fetchRealGitHubActionsRun(runId.trim());
+
+  // Step Functions ARN
+  const isSfnArn = runId.trim().startsWith('arn:aws:states:');
+  if (isSfnArn) return buildStepFunctionsEtlContext(runId.trim());
 
   return null;
 }
@@ -426,5 +447,194 @@ Orchestrator context source: simulated (wire up Airflow REST API for real data)`
     failedAt,
     enrichedPrompt,
     source: 'simulated',
+  };
+}
+
+// -------------------------------------------------------------------
+// Real GitHub Actions run fetch
+// -------------------------------------------------------------------
+async function fetchRealGitHubActionsRun(runId: string): Promise<RunContext | null> {
+  const run = await getWorkflowRun(runId);
+
+  if (run.source === 'unavailable') {
+    return {
+      runId, orchestrator: 'unknown', failedAsset: 'unknown',
+      startedAt: new Date().toISOString(), failedAt: new Date().toISOString(),
+      enrichedPrompt: `Triage GitHub Actions workflow run: ${runId}
+
+STATUS: GitHub credentials not configured — cannot fetch live run context.
+
+To enable: go to /settings → GitHub → set GITHUB_TOKEN, GITHUB_REPO_OWNER, GITHUB_REPO_NAME.
+
+Run ID: ${runId}
+Please paste the workflow logs manually to continue triage.`,
+      source: 'simulated',
+    };
+  }
+
+  const failedJobsStr = run.failedJobs.map(j => {
+    const stepsStr = j.failedSteps.map(s => `      ✗ ${s.name}`).join('\n');
+    return `  Job: ${j.name}\n${stepsStr || '      (no individual step failures)'}`;
+  }).join('\n') || '  No failed jobs found (may be a setup failure)';
+
+  const enrichedPrompt = `Triage GitHub Actions workflow failure for run: ${runId}
+
+WORKFLOW CONTEXT (live from GitHub API):
+- Workflow: ${run.workflowName ?? 'unknown'}
+- Repository: ${run.repoFullName ?? 'unknown'}
+- Status: ${run.conclusion ?? run.status ?? 'failure'}
+- Triggered by: ${run.triggeredBy ?? 'unknown'}
+- Head commit: ${run.headSha ?? 'unknown'} — "${run.headCommitMessage ?? 'unknown'}"
+- Started: ${run.startedAt ?? 'unknown'}
+- Completed: ${run.completedAt ?? 'unknown'}
+
+FAILED JOBS AND STEPS:
+${failedJobsStr}
+
+NOTE: GitHub Actions does not provide data lineage. To understand upstream context:
+  - Check which dbt models / scripts this workflow runs
+  - Check if upstream Fivetran syncs ran before this workflow triggered
+  - Look at the commit that triggered this run for recent code changes
+
+SOURCE: Live data from GitHub API (run ID: ${runId})`;
+
+  return {
+    runId, orchestrator: 'unknown', failedAsset: run.workflowName ?? 'unknown',
+    startedAt: run.startedAt ?? new Date().toISOString(),
+    failedAt: run.completedAt ?? new Date().toISOString(),
+    enrichedPrompt, source: 'dagster_api',
+  };
+}
+
+// -------------------------------------------------------------------
+// Scenario 5: GitHub Actions dbt pipeline failure
+// PR merged → dbt workflow triggered → customer_tier ref broken
+// -------------------------------------------------------------------
+function buildGitHubActionsDbtContext(runId: string): RunContext {
+  const now = new Date();
+  const failedAt = new Date(now.getTime() - 25 * 60000).toISOString();
+  const startedAt = new Date(now.getTime() - 35 * 60000).toISOString();
+
+  const enrichedPrompt = `Triage GitHub Actions workflow failure for run: ${runId}
+
+WORKFLOW CONTEXT (GitHub Actions):
+- Workflow: dbt_transform.yml
+- Repository: acme-corp/data-platform
+- Trigger: push to main (PR #247 merged 4 hours ago)
+- Triggered by: alex-p
+- Head commit: a4f7c2e — "rename customer_segment → customer_tier across customer models"
+- Started: ${startedAt}
+- Failed at: ${failedAt}
+
+FAILED JOBS AND STEPS:
+  Job: dbt-run
+    ✓ Setup Python environment (4s)
+    ✓ Install dbt dependencies (12s)
+    ✓ dbt deps (8s)
+    ✓ dbt compile (23s)
+    ✓ dbt run --select staging.+ (45s)
+    ✗ dbt run --select marts.customers+ (FAILED after 34s)
+    ✗ dbt test --select marts.customers+ (skipped due to prior failure)
+
+FAILURE OUTPUT:
+  Database Error in model fct_customer_orders (models/marts/customers/fct_customer_orders.sql)
+    column "customer_tier" of relation "dim_customers" does not exist
+    LINE 47: SELECT c.customer_tier, SUM(o.order_amount) as revenue
+    compiled SQL: target/compiled/dbt_project/models/marts/fct_customer_orders.sql
+
+LINEAGE CONTEXT (from dbt manifest + sources.yml):
+  fct_customer_orders
+    ← dim_customers (dbt model)
+       ← stg_customers (dbt staging)
+          ← source('salesforce', 'accounts') → Fivetran Salesforce connector
+
+NOTE: The failing model references "customer_tier" which was introduced in PR #247
+(merged 4 hours ago, commit a4f7c2e). The PR renamed customer_segment → customer_tier
+in dim_customers but did NOT update fct_customer_orders.
+
+RECENT FIVETRAN SYNC STATUS:
+  fivetran_salesforce_sync: SUCCEEDED 2h ago, 3,201 rows loaded (normal)
+  (Fivetran is NOT the issue — this is a code change problem)
+
+Pipeline: dbt_customers_transform (orchestrator: GitHub Actions)
+Run ID: ${runId}`;
+
+  return {
+    runId, orchestrator: 'unknown', failedAsset: 'dbt_customers_transform',
+    startedAt, failedAt, enrichedPrompt, source: 'simulated',
+  };
+}
+
+// -------------------------------------------------------------------
+// Scenario 6: Step Functions ETL pipeline failure
+// S3 → Glue → Snowflake chain. Failed at Load step (permission denied).
+// Demonstrates multi-step pipeline context without a DAG orchestrator.
+// -------------------------------------------------------------------
+function buildStepFunctionsEtlContext(runId: string): RunContext {
+  const now = new Date();
+  const failedAt = new Date(now.getTime() - 40 * 60000).toISOString();
+  const startedAt = new Date(now.getTime() - 75 * 60000).toISOString();
+
+  const enrichedPrompt = `Triage AWS Step Functions execution failure: ${runId}
+
+STEP FUNCTIONS CONTEXT:
+- State Machine: revenue-etl-pipeline
+- Execution: arn:aws:states:us-east-1:123456789012:execution:revenue-etl-pipeline:${runId}
+- Status: FAILED
+- Started: ${startedAt}
+- Failed at: ${failedAt}
+
+STATE MACHINE DEFINITION (simplified):
+  ExtractFromS3 → TransformWithGlue → ValidateRowCounts → LoadToSnowflake → NotifySuccess
+                                                              ↑
+                                                         FAILED HERE
+
+EXECUTION HISTORY:
+  [SUCCEEDED] ExtractFromS3
+    - S3 bucket: s3://acme-data-lake/raw/revenue/2026-06-28/
+    - Files extracted: 247 Parquet files, 2.3GB total
+    - Duration: 8 minutes
+
+  [SUCCEEDED] TransformWithGlue
+    - Glue job: revenue-transform-job
+    - Output rows: 1,847,293
+    - Duration: 22 minutes
+
+  [SUCCEEDED] ValidateRowCounts
+    - Expected: >1M rows ✓
+    - Null rate on revenue_amount: 0.02% ✓ (below 1% threshold)
+
+  [FAILED] LoadToSnowflake
+    - Duration: 0 seconds (immediate failure)
+    - Error type: SnowflakeConnectionError
+    - Cause: "Insufficient privileges to operate on schema 'PROD.REVENUE'. 
+      User: ETL_SVC_ACCT, Role: ETL_ROLE, Error: 003001 (42501)"
+
+CLOUDWATCH LOGS (LoadToSnowflake step):
+  [ERROR] snowflake.connector.errors.ProgrammingError: 003001 (42501):
+  Insufficient privileges to operate on schema 'PROD.REVENUE'
+  User: ETL_SVC_ACCT
+  Role: ETL_ROLE
+
+CROSS-TOOL CONTEXT:
+  - EventBridge detected FAILED state at ${failedAt}
+  - Alert sent to #data-ops Slack channel
+  - This is the 2nd occurrence this quarter (last: March 31 → quarterly credential rotation)
+  - PROD.REVENUE.FCT_REVENUE has not been updated for 6 hours (freshness SLA: 4h)
+  - 3 downstream BI dashboards are now stale
+
+PIECING TOGETHER LINEAGE (no OpenLineage, using manual mapping):
+  Snowflake PROD.REVENUE.FCT_REVENUE
+    ← LoadToSnowflake (Step Functions, this state machine)
+       ← TransformWithGlue (Glue job: revenue-transform-job)
+          ← S3 raw zone (upstream ETL deposits here)
+             ← Fivetran/custom connectors (multiple sources)
+
+Pipeline: revenue-etl-pipeline (orchestrator: AWS Step Functions)
+Execution: ${runId}`;
+
+  return {
+    runId, orchestrator: 'unknown', failedAsset: 'revenue-etl-pipeline',
+    startedAt, failedAt, enrichedPrompt, source: 'simulated',
   };
 }
