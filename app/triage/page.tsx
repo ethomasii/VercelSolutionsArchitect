@@ -716,7 +716,7 @@ function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportTex
 
   // AUTO-DERIVE ACTIONS: if proposeActions wasn't called by the model (common with complex runs),
   // derive them from the available tool outputs — makes the Actions panel always appear
-  if (proposedActions.length === 0 && fullText) {
+  if (proposedActions.length === 0) {
     const classifyPart2 = toolParts.find(p => p.type === 'tool-classifyFailure');
     const classifyOut = (classifyPart2?.output ?? classifyPart2?.input) as {
       failureType?: string; affectedPipeline?: string; confidence?: number;
@@ -747,31 +747,47 @@ function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportTex
     }
 
     // Network timeout with recent batch size increase → revert config
-    if (ft === 'network_timeout' && causePR?.message?.toLowerCase().includes('batch')) {
-      rootCauseNote = 'Batch size increase likely caused API rate limiting — the PR is the root cause, not the API.';
+    if ((ft === 'network_timeout' || ft === 'code_regression') && causePR?.message?.toLowerCase().match(/batch|chunk|size|parallel/)) {
+      rootCauseNote = rootCauseNote ?? 'Recent batch size or parallelism change may have caused API rate limiting — the config change is likely the root cause.';
       derived.push({
         id: 'create_pr',
-        label: 'Revert batch size config change',
-        description: 'Revert config.yaml batch size to previous value while investigating API rate limits.',
+        label: 'Revert batch size / config change',
+        description: `Revert the "${causePR?.message?.slice(0, 60)}" change while investigating API rate limits.`,
         risk: 'low',
         actionConfidence: 'High',
         requiresApproval: true,
-        params: { message: causePR.message ?? '' },
+        params: { message: causePR?.message ?? '' },
       });
     }
 
-    // Known flaky → mark resolved, slack
+    // Dagster rerun — always relevant for Dagster failures
+    derived.push({
+      id: 'rerun_dagster',
+      label: 'Rerun in Dagster',
+      description: 'Re-execute the failed run from the failed step (after addressing root cause).',
+      risk: 'low',
+      actionConfidence: 'Medium',
+      requiresApproval: true,
+      params: {},
+    });
+
+    // Known flaky → mark resolved
     if (incidentOut?.knownFlaky) {
-      rootCauseNote = 'This is a known flaky pipeline — wait for it to resolve before escalating.';
+      rootCauseNote = rootCauseNote ?? 'This is a known flaky pipeline — wait for it to resolve before escalating.';
       derived.push({ id: 'mark_resolved', label: 'Mark as resolved (known flaky)', description: 'Close the incident — this pipeline self-resolves.', risk: 'none', actionConfidence: 'High', requiresApproval: false });
     }
 
-    // Always offer Slack + Jira for high-confidence failures
-    if ((classifyOut?.confidence ?? 0) > 0.5) {
-      derived.push({ id: 'create_slack_alert', label: 'Post to #data-alerts', description: 'Notify the team about this failure with the triage report.', risk: 'none', actionConfidence: 'High', requiresApproval: false });
-    }
+    // Always offer Slack + Jira
+    derived.push({ id: 'create_slack_alert', label: 'Post to #data-alerts', description: 'Notify the team about this failure with the triage report.', risk: 'none', actionConfidence: 'High', requiresApproval: false });
 
-    if (derived.length > 0) proposedActions = derived;
+    if (derived.length > 0) {
+      proposedActions = derived;
+      if (!rootCauseNote) {
+        rootCauseNote = causePR
+          ? `PR "${causePR.message?.slice(0, 80)}" merged recently — likely the root cause.`
+          : `${ft === 'unknown' ? 'Classification uncertain — check Dagster UI for Python traceback.' : `Failure type: ${ft}.`}`;
+      }
+    }
   }
 
   // Extract pipeline name from classifyFailure for the remediation API
