@@ -216,14 +216,19 @@ DAG TASK DEPENDENCIES:
     ├── run_fivetran_syncs          SUCCEEDED (02:45 UTC)
     └── run_dbt_revenue_models      FAILED    (04:30 UTC)  ← this task
 
-CONCURRENT SNOWFLAKE WORKLOAD (from Snowflake query history):
-  Time window 02:00-04:00 UTC (overlapping with failed dbt run):
-  - ml_feature_pipeline (separate Dagster job):
-      Warehouse: COMPUTE_WH_L (same warehouse as dbt!)
-      Query: INSERT INTO ML_FEATURES.CUSTOMER_EMBEDDINGS ...
-      Duration: 3h 12min, scanning 2.1B rows
-      Status: RUNNING (was running when dbt started)
-  - dbt uses COMPUTE_WH_L with auto-suspend=2min
+SNOWFLAKE WAREHOUSE CONTENTION:
+  Snowflake query history for COMPUTE_WH_L during 02:00-04:00 UTC:
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  customer_ltv_batch_job (nightly ETL, separate team):               │
+  │    Warehouse: COMPUTE_WH_L  ← SAME WAREHOUSE as dbt revenue models! │
+  │    Query: INSERT INTO ANALYTICS.LTV.CUSTOMER_SCORES ...              │
+  │    Duration: 3h 12min, scanning 2.1 billion rows                     │
+  │    Status: RUNNING (was already running when dbt started at 03:00)   │
+  └─────────────────────────────────────────────────────────────────────┘
+  
+  Both jobs share COMPUTE_WH_L. Snowflake credits were fully consumed
+  by the LTV batch — dbt queries queued and eventually timed out.
+  No Snowflake platform error — this is a RESOURCE CONTENTION issue.
 
 FAILURE LOG (from Airflow task logs):
   [2026-06-28 04:28:14] INFO - Running dbt model revenue_mart
@@ -231,12 +236,12 @@ FAILURE LOG (from Airflow task logs):
   [2026-06-28 04:30:02] ERROR - Query ID: 01ab8f4c-0001-1234-0000-000000000001
   [2026-06-28 04:30:02] ERROR - Snowflake error: 604 (query execution time exceeded)
   
-  dbt model revenue_mart (run time: 94 minutes, query timeout: 300s)
-  Warehouse COMPUTE_WH_L was under heavy load — auto-suspend disabled by concurrent job.
+  dbt model revenue_mart timed out after 94 minutes.
+  Snowflake warehouse COMPUTE_WH_L was saturated by concurrent batch job.
 
-NOTE: This failure is caused by resource contention, NOT a code issue. The ML
-feature pipeline and dbt are sharing a Snowflake warehouse. The fix is to separate
-workloads onto different warehouses, not to retry dbt.
+NOTE: This is NOT a code regression and NOT a Snowflake platform issue.
+The fix is to move one of the two jobs to a dedicated warehouse.
+Do NOT just retry without addressing the warehouse allocation.
 
 Pipeline: revenue_mart (Airflow DAG: ${runId})
 Orchestrator context source: simulated (wire up Airflow REST API for real data)`;

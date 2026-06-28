@@ -242,9 +242,14 @@ or schema_mismatch classification.`,
     description: `Check real-time vendor status pages for active incidents or degradation.
 Call this whenever the failure might be caused by a vendor outage:
 - upstream_data_missing → always check (Fivetran, Shopify, Salesforce)
-- resource_exhaustion → check Snowflake, Databricks
+- resource_exhaustion → check Snowflake, Databricks (only if pipeline name says "databricks")
 - network_timeout → check the external API vendor
 - schema_mismatch → skip (not vendor status related)
+
+IMPORTANT: Only pass vendors that are EXPLICITLY named in the pipeline name or log.
+Do NOT infer "databricks" from words like "ml", "spark", or "batch".
+Do NOT infer "shopify" from "orders" unless the log explicitly mentions Shopify.
+Use the auto-detection (leave vendors empty) when not sure — it is conservative by design.
 
 A vendor outage changes the entire remediation: "wait for Fivetran recovery" not "debug your dbt code."
 Uses public StatusPage.io APIs — no auth required.`,

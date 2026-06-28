@@ -36,7 +36,7 @@ interface StatusPageSummary {
   }>;
 }
 
-const VENDOR_STATUS_URLS: Record<string, { url: string; statusPage: string }> = {
+const VENDOR_STATUS_URLS: Record<string, { url: string | null; statusPage: string }> = {
   fivetran: {
     url: 'https://status.fivetran.com/api/v2/summary.json',
     statusPage: 'https://status.fivetran.com',
@@ -50,7 +50,9 @@ const VENDOR_STATUS_URLS: Record<string, { url: string; statusPage: string }> = 
     statusPage: 'https://status.getdbt.com',
   },
   databricks: {
-    url: 'https://status.databricks.com/api/v2/summary.json',
+    // Databricks uses a custom status page (not StatusPage.io), no standard API.
+    // Dispatch will return a direct link instead of querying an API.
+    url: null,
     statusPage: 'https://status.databricks.com',
   },
   github: {
@@ -83,27 +85,32 @@ const VENDOR_STATUS_URLS: Record<string, { url: string; statusPage: string }> = 
   },
 };
 
-// Map pipeline name keywords to vendor status checks
+// Map pipeline name keywords to vendor status checks.
+// Conservative: only map explicit product names, not generic terms like "ml" or "spark"
+// which don't uniquely identify a vendor. The agent can always override via the `vendors`
+// parameter if the log explicitly names a product.
 export function detectVendors(pipelineName: string, failureType: string): string[] {
   const name = pipelineName.toLowerCase();
   const vendors: string[] = [];
 
-  if (name.includes('fivetran') || name.includes('orders') && failureType === 'upstream_data_missing') vendors.push('fivetran');
-  if (name.includes('snowflake') || name.includes('raw') || name.includes('warehouse')) vendors.push('snowflake');
+  if (name.includes('fivetran')) vendors.push('fivetran');
+  if (name.includes('snowflake')) vendors.push('snowflake');
   if (name.includes('dbt')) vendors.push('dbt');
-  if (name.includes('databricks') || name.includes('spark') || name.includes('ml')) vendors.push('databricks');
-  if (name.includes('shopify') || name.includes('orders')) vendors.push('shopify');
-  if (name.includes('salesforce') || name.includes('crm')) vendors.push('salesforce');
+  if (name.includes('databricks')) vendors.push('databricks'); // explicit only, not 'ml' or 'spark'
+  if (name.includes('shopify')) vendors.push('shopify');
+  if (name.includes('salesforce') || name.includes('sfdc')) vendors.push('salesforce');
   if (name.includes('stripe') || name.includes('payment')) vendors.push('stripe');
-  if (name.includes('github') || name.includes('git')) vendors.push('github');
+  if (name.includes('github')) vendors.push('github');
   if (name.includes('airflow') || name.includes('astronomer')) vendors.push('airflow');
 
-  // Always include the primary data source vendor based on failure type
-  if (failureType === 'upstream_data_missing' && !vendors.includes('fivetran')) {
+  // Infer primary vendor from failure type when no explicit vendor found
+  if (failureType === 'upstream_data_missing' && vendors.length === 0) {
     vendors.push('fivetran');
   }
+  if (failureType === 'resource_exhaustion' && vendors.length === 0) {
+    vendors.push('snowflake'); // most common warehouse for resource issues
+  }
 
-  // Deduplicate and limit to 3 (avoid too many requests)
   return [...new Set(vendors)].slice(0, 3);
 }
 
@@ -132,6 +139,19 @@ export async function checkVendorStatus(vendor: string): Promise<VendorStatus> {
   }
 
   try {
+    // Some vendors don't expose a StatusPage.io API — return a link-only result
+    if (!config.url) {
+      return {
+        vendor,
+        indicator: 'unknown',
+        description: 'Check status page manually (no public API available)',
+        level: 'unknown',
+        statusPageUrl: config.statusPage,
+        checkedAt,
+        activeIncidents: [],
+      };
+    }
+
     const res = await fetch(config.url, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(5000), // 5s timeout per vendor
