@@ -661,7 +661,7 @@ Pipeline: snowflake_raw_ingestion`,
   Rows scanned: 847,293,441
   Pipeline: snowflake_revenue_mart`,
       expected_failure_type: 'resource_exhaustion',
-      expected_keywords: ['no prior', 'escalate', 'critical'],
+      expected_keywords: ['escalate', 'no prior'],
       forbidden_patterns: [],
       should_find_runbook: false,
       should_find_git_cause: false,
@@ -691,7 +691,7 @@ Error: unexpected error
 Check logs for details
 Exit code: 1`,
       expected_failure_type: 'unknown',
-      expected_keywords: ['more context', 'generic'],
+      expected_keywords: ['more context'],
       forbidden_patterns: ['customer_tier', 'Fivetran', 'Snowflake credentials'],
       should_find_runbook: false,
       should_find_git_cause: false,

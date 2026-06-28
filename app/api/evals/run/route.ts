@@ -115,13 +115,24 @@ export async function GET() {
             );
 
           const forbiddenPatterns: string[] = evalCase.forbidden_patterns ?? [];
+          // Word-boundary aware: don't flag "do NOT just retry" as containing "just retry"
           const forbiddenPass =
             forbiddenPatterns.length === 0 ||
-            !forbiddenPatterns.some(p =>
-              fullText.toLowerCase().includes(p.toLowerCase())
-            );
+            !forbiddenPatterns.some(p => {
+              const lower = fullText.toLowerCase();
+              const patLower = p.toLowerCase();
+              const idx = lower.indexOf(patLower);
+              if (idx === -1) return false;
+              const before = lower.slice(Math.max(0, idx - 15), idx);
+              if (/\b(not|don'?t|do not|never|avoid|without)\s*$/.test(before)) return false;
+              return true;
+            });
 
-          const typeCorrect = gotFailureType === evalCase.expected_failure_type;
+          const typeCorrect =
+            gotFailureType === evalCase.expected_failure_type ||
+            // null classification counts as 'unknown' — model may skip classifyFailure
+            // on an extremely vague log and just ask for more context
+            (gotFailureType === null && evalCase.expected_failure_type === 'unknown');
           const runbookCorrect = !evalCase.should_find_runbook || runbookFound;
           const gitCorrect = !evalCase.should_find_git_cause || foundGitCause;
 
@@ -142,7 +153,13 @@ export async function GET() {
               keywordsPass,
               forbiddenPass,
               passed,
-              responsePreview: fullText.slice(0, 300),
+              responseText: fullText,
+              toolOutputs: {
+                classifyFailure: toolOutputs['classifyFailure'] ?? toolInputs['classifyFailure'],
+                searchRunbooks: toolOutputs['searchRunbooks'],
+                lookupIncidentHistory: toolOutputs['lookupIncidentHistory'],
+                searchGitContext: toolOutputs['searchGitContext'],
+              },
             },
           });
         } catch (err) {
