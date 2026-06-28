@@ -100,11 +100,12 @@ const INTEGRATIONS: IntegrationDef[] = [
   },
   {
     id: 'github', name: 'GitHub', icon: '🐙', group: 'Knowledge',
-    description: 'Real commit history and PRs. Finds the code change that broke things.',
+    description: 'Recent commits, PRs, and actual file content. Add multiple instances for dbt, dagster, airflow repos — Dispatch reads files to pinpoint exact broken lines and propose code fixes.',
+    supportsMultipleInstances: true,
     fields: [
-      { key: 'GITHUB_TOKEN', label: 'Personal access token', placeholder: 'ghp_...', isSecret: true, hint: 'Settings → Developer settings → PAT → repo scope' },
-      { key: 'GITHUB_REPO_OWNER', label: 'Repo owner', placeholder: 'your-org', isSecret: false },
-      { key: 'GITHUB_REPO_NAME', label: 'dbt repo name', placeholder: 'data-platform', isSecret: false },
+      { key: 'GITHUB_TOKEN', label: 'Personal access token', placeholder: 'ghp_...', isSecret: true, hint: 'Settings → Developer settings → PAT → repo + pull_requests scopes' },
+      { key: 'GITHUB_REPO_OWNER', label: 'Org / owner', placeholder: 'acme-corp', isSecret: false, hint: 'Add separate instances named "dbt", "dagster", "airflow" for each repo' },
+      { key: 'GITHUB_REPO_NAME', label: 'Repo name', placeholder: 'data-platform (dbt), dagster-pipelines, airflow-dags...', isSecret: false },
     ],
   },
   {
