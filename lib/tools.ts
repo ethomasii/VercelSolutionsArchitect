@@ -14,6 +14,20 @@ export const dispatchTools = {
     description: `Classify the pipeline failure type and extract key signals from
 the log text. ALWAYS call this first before any other tool.
 
+Also extract vendor/product names EXPLICITLY mentioned in the log or run context.
+These are passed directly to checkVendorStatus — no keyword guessing needed when
+the vendor name is right there in the error message.
+
+Examples:
+- "snowflake.connector.errors.ProgrammingError" → vendors: ['snowflake']
+- "FivetranSyncError: No new data from orders_shopify" → vendors: ['fivetran', 'shopify']
+- "com.databricks.backend...ClusterAutoTerminatedException" → vendors: ['databricks']
+- "dbt test failures" with upstream Fivetran context in run → vendors: ['fivetran', 'dbt']
+- Generic "unexpected error, exit code 1" → vendors: [] (nothing to extract)
+
+With an enriched run context (Dagster/Airflow): extract vendors from the full
+dependency graph and CONCURRENT WORKLOAD section, not just the error line.
+
 Classification guidance for ambiguous cases:
 - "does not exist or not authorized" with a named User/Role → permission_denied
   (Snowflake 002003/42S02 can mean either missing object OR access denied;
@@ -40,6 +54,9 @@ Classification guidance for ambiguous cases:
       confidence: z.number().min(0).max(1),
       affectedPipeline: z.string().describe('Best guess at pipeline/asset name'),
       keySignals: z.array(z.string()).describe('Key error strings extracted from log'),
+      vendorsDetected: z.array(z.string()).describe(
+        'Vendor/product names explicitly found in the log or run context (e.g. ["snowflake","fivetran"]). Empty array if none named.'
+      ),
       reasoning: z.string(),
     }),
     // Passthrough execute so the multi-step loop can continue with a result.
@@ -240,19 +257,25 @@ or schema_mismatch classification.`,
 
   checkVendorStatus: tool({
     description: `Check real-time vendor status pages for active incidents or degradation.
-Call this whenever the failure might be caused by a vendor outage:
-- upstream_data_missing → always check (Fivetran, Shopify, Salesforce)
-- resource_exhaustion → check Snowflake, Databricks (only if pipeline name says "databricks")
-- network_timeout → check the external API vendor
-- schema_mismatch → skip (not vendor status related)
 
-IMPORTANT: Only pass vendors that are EXPLICITLY named in the pipeline name or log.
-Do NOT infer "databricks" from words like "ml", "spark", or "batch".
-Do NOT infer "shopify" from "orders" unless the log explicitly mentions Shopify.
-Use the auto-detection (leave vendors empty) when not sure — it is conservative by design.
+Vendor detection priority (use the FIRST that applies):
+1. BEST: Pass the vendorsDetected from classifyFailure directly as the vendors list.
+   These came from explicit vendor names in the log — no guessing needed.
+   e.g. classifyFailure returned vendorsDetected: ['snowflake', 'fivetran'] → pass those
 
-A vendor outage changes the entire remediation: "wait for Fivetran recovery" not "debug your dbt code."
-Uses public StatusPage.io APIs — no auth required.`,
+2. FALLBACK: If vendorsDetected is empty (e.g. truncated log with no vendor names),
+   leave the vendors parameter empty and let auto-detection use the pipeline name.
+
+3. NEVER infer vendors from generic words (ml, batch, pipeline, data, spark, job).
+   Only use explicit product names from the log or run context.
+
+When to call this:
+- upstream_data_missing: yes — check connector vendors
+- resource_exhaustion: yes — check warehouse vendors
+- network_timeout: yes — check external API vendor
+- schema_mismatch, dbt_compilation_error: skip unless vendor explicitly named
+
+A vendor outage transforms the remediation: "wait for recovery" not "debug code."`,
     inputSchema: z.object({
       pipelineName: z.string(),
       failureType: z.string(),
