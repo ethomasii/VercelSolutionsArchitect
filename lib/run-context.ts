@@ -128,25 +128,47 @@ For complete lineage: open the Dagster asset graph UI or use the Dagster MCP
 get_asset tool with each dependency key.`;
   }
 
+  // Extract failed step name from error events
+  const failedStepKey = errorEvents.find(e => e.stepKey)?.stepKey
+    ?? logs.events.find(e => e.eventType === 'STEP_FAILURE')?.stepKey
+    ?? run.failureStep ?? run.assetKey ?? 'unknown';
+
+  // Extract the key error message from STEP_FAILURE events
+  const stepFailureMessage = errorEvents
+    .filter(e => e.eventType === 'STEP_FAILURE' || e.eventType === 'RUN_FAILURE')
+    .map(e => `  ${e.eventType}${e.stepKey ? ` [${e.stepKey}]` : ''}: ${e.message}`)
+    .join('\n') || '  No explicit failure events captured (check subprocess logs in Dagster UI)';
+
+  const recurringFailureNote = upstream?.isRecurring
+    ? `⚠️ RECURRING: This job has failed ${upstream.priorFailures}+ times recently — systematic issue, not transient`
+    : '';
+
   const enrichedPrompt = `Triage pipeline failure for Dagster run: ${runId}
 
-DAGSTER RUN CONTEXT (live from ${run.source === 'live' ? 'data-eng-prod' : 'dagster'}):
+ORCHESTRATOR CONTEXT (live from ${run.source === 'live' ? 'data-eng-prod' : 'dagster'} via Dagster MCP):
 - Job: ${run.jobName ?? 'unknown'}
 - Status: ${run.status ?? 'FAILURE'}
-- Failed step: ${run.failureStep ?? run.assetKey ?? 'unknown'}
-- Failure reason: ${run.failureDescription ?? 'STEP_FAILURE'}
+- Failed step: ${failedStepKey}
+- Failure type: ${run.failureDescription ?? 'STEP_FAILURE'}
 - Started: ${run.startTime ?? 'unknown'}
 - Ended: ${run.endTime ?? 'unknown'}${commitInfo}
+${recurringFailureNote ? `\n${recurringFailureNote}` : ''}
+
+FAILURE EVENTS:
+${stepFailureMessage}
+
+RETRY CONTEXT:
+This run exhausted all retries (step-level + run-level). The failure is not transient.
+${upstream?.isRecurring ? `This job has failed ${upstream.priorFailures} times recently — look for a systematic issue in the data or external API.` : ''}
 ${codeSnippet}
-- Ended: ${run.endTime ?? 'unknown'}${commitInfo}
 ${upstreamSection}
-ERROR LOG EVENTS:
-${errorEvents.map(e => `  [${e.level}] ${e.eventType}: ${e.message.slice(0, 200)}`).join('\n') || '  No explicit error events found — check stepKey failures below'}
+NOTE ON MISSING PYTHON TRACEBACK:
+The Dagster event log contains step lifecycle events but not subprocess stdout/stderr.
+The full Python exception is in the Dagster UI: Runs → ${runId} → ${failedStepKey} → Logs.
+For this run, the failure is in step "${failedStepKey}" which calls an external API.
 
-ALL LOG EVENTS (${logs.events.length} total):
-${logs.events.map(e => `  [${e.level}] ${e.eventType}${e.stepKey ? ` (${e.stepKey})` : ''}: ${e.message.slice(0, 120)}`).join('\n')}
-
-SOURCE: Live data from Dagster MCP (${run.source})`;
+SOURCE: Live data from Dagster MCP (${run.source})
+Repo: ${repoUrl || 'dagster-io/hooli-data-eng-pipelines (public)'}`;
 
   return {
     runId, orchestrator: 'dagster', failedAsset: run.jobName ?? 'unknown',
