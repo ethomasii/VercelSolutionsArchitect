@@ -310,6 +310,8 @@ export default function EvalsPage() {
   const [loading, setLoading] = useState(false);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [analyzing, setAnalyzing] = useState<Set<string>>(new Set());
+  const [toolProgress, setToolProgress] = useState<Record<string, string[]>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   async function runEvals() {
@@ -318,6 +320,8 @@ export default function EvalsPage() {
     setResults([]);
     setSummary(null);
     setTotal(0);
+    setAnalyzing(new Set());
+    setToolProgress({});
     setExpandedId(null);
 
     try {
@@ -343,11 +347,25 @@ export default function EvalsPage() {
           if (!line.trim()) continue;
           try {
             const event = JSON.parse(line) as {
-              type: string; total?: number; passed?: number; failed?: number; passRate?: number; data?: EvalResult;
+              type: string; total?: number; passed?: number; failed?: number; passRate?: number;
+              data?: EvalResult; name?: string; toolName?: string;
             };
-            if (event.type === 'start') setTotal(event.total ?? 0);
-            else if (event.type === 'result' && event.data) setResults(prev => [...prev, event.data!]);
-            else if (event.type === 'done') setSummary({ total: event.total ?? 0, passed: event.passed ?? 0, failed: event.failed ?? 0, passRate: event.passRate ?? 0 });
+            if (event.type === 'start') {
+              setTotal(event.total ?? 0);
+            } else if (event.type === 'case-start' && event.name) {
+              setAnalyzing(prev => new Set([...prev, event.name!]));
+              setToolProgress(prev => ({ ...prev, [event.name!]: [] }));
+            } else if (event.type === 'step' && event.name && event.toolName) {
+              setToolProgress(prev => ({
+                ...prev,
+                [event.name!]: [...(prev[event.name!] ?? []), event.toolName!],
+              }));
+            } else if (event.type === 'result' && event.data) {
+              setResults(prev => [...prev, event.data!]);
+              setAnalyzing(prev => { const s = new Set(prev); s.delete(event.data!.name); return s; });
+            } else if (event.type === 'done') {
+              setSummary({ total: event.total ?? 0, passed: event.passed ?? 0, failed: event.failed ?? 0, passRate: event.passRate ?? 0 });
+            }
           } catch { /* ignore malformed lines */ }
         }
       }
@@ -438,24 +456,55 @@ export default function EvalsPage() {
             <tbody className="divide-y divide-zinc-800/50">
               {EVAL_NAMES.map(name => {
                 const r = results.find(x => x.name === name);
-                const idx = EVAL_NAMES.indexOf(name);
-                const isRunning = loading && !r && results.length >= idx && results.length < idx + 1;
+                const isCurrentlyAnalyzing = analyzing.has(name);
+                const tools = toolProgress[name] ?? [];
                 const isExpanded = r && expandedId === r.id;
+
+                const TOOL_META: Record<string, string> = {
+                  classifyFailure: '⚡ classified',
+                  searchRunbooks: '📚 runbooks',
+                  lookupIncidentHistory: '🔍 history',
+                  searchGitContext: '🔀 git',
+                  checkVendorStatus: '🌐 status',
+                };
 
                 if (!r) {
                   return (
-                    <tr key={name}>
-                      <td className="px-4 py-3"><p className="text-xs font-medium text-zinc-500">{name}</p></td>
+                    <tr key={name} className={isCurrentlyAnalyzing ? 'bg-orange-950/10' : ''}>
+                      <td className="px-4 py-3">
+                        <p className="text-xs font-medium text-zinc-500">{name}</p>
+                      </td>
                       <td className="px-4 py-3 text-zinc-700 text-xs" colSpan={7}>
-                        {isRunning ? (
-                          <span className="flex items-center gap-2 text-zinc-500">
-                            <svg className="h-3 w-3 animate-spin text-orange-500" viewBox="0 0 24 24" fill="none">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                            </svg>
-                            Analyzing...
-                          </span>
-                        ) : <span className="text-zinc-800">pending</span>}
+                        {isCurrentlyAnalyzing ? (
+                          <div className="flex flex-col gap-1.5">
+                            <div className="flex items-center gap-2 text-zinc-400 text-xs">
+                              <svg className="h-3 w-3 animate-spin text-orange-500 shrink-0" viewBox="0 0 24 24" fill="none">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                              </svg>
+                              <span className="text-orange-400 font-medium">Analyzing...</span>
+                            </div>
+                            {tools.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5 pl-5">
+                                {tools.map((toolName, i) => (
+                                  <span key={i} className="inline-flex items-center gap-1 rounded bg-zinc-800 px-1.5 py-0.5 text-xs text-zinc-400">
+                                    {TOOL_META[toolName] ?? toolName} ✓
+                                  </span>
+                                ))}
+                                {tools.length < 5 && (
+                                  <span className="inline-flex items-center gap-1 rounded bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 text-xs text-zinc-600">
+                                    <svg className="h-2.5 w-2.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                                    </svg>
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-zinc-800">pending</span>
+                        )}
                       </td>
                     </tr>
                   );
