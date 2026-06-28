@@ -663,15 +663,15 @@ Pipeline: snowflake_raw_ingestion`,
     {
       name: 'Ambiguous log — insufficient info',
       input_log: `ERROR [pipeline] Failed
-  Error: unexpected error
-  Check logs for details
-  Exit code: 1`,
+Error: unexpected error
+Check logs for details
+Exit code: 1`,
       expected_failure_type: 'unknown',
-      expected_keywords: ['more context', 'insufficient'],
+      expected_keywords: ['more context', 'generic'],
       forbidden_patterns: ['customer_tier', 'Fivetran', 'Snowflake credentials'],
       should_find_runbook: false,
       should_find_git_cause: false,
-      notes: 'Truncated log with no useful signals. Should classify as unknown with Low confidence.',
+      notes: 'Truncated log with no useful signals. Should classify as unknown with Low confidence and ask for more context.',
     },
   ];
 
