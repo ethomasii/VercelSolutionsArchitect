@@ -101,8 +101,8 @@ export default function IntegrationsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
             <div>
               <p className="text-green-400 font-medium mb-1">✅ Hosted (remote HTTP — just add credentials)</p>
-              <p className="text-zinc-600">Dagster · Stripe · Vercel · Neon · Prefect (via FastMCP Cloud)</p>
-              <p className="text-zinc-700 mt-0.5">Add URL + headers to .cursor/mcp.json — done.</p>
+              <p className="text-zinc-600">Dagster · Stripe · Vercel · Neon · Prefect (FastMCP Cloud) · Notion · Atlassian (Confluence + Jira)</p>
+              <p className="text-zinc-700 mt-0.5">Add URL + headers to .cursor/mcp.json — done. Atlassian Rovo covers Confluence AND Jira in one OAuth connection.</p>
             </div>
             <div>
               <p className="text-amber-400 font-medium mb-1">⚠️ Self-hosted (local process — run uvx locally)</p>
@@ -176,6 +176,8 @@ const COVERAGE_ITEMS = [
   { signal: 'Has this failed before? Is it recurring?', coverage: 'full', tool: 'Neon incidents table + Dagster list_runs', desc: 'Prior run history + incident DB. Recurring vs. first-time failure changes the remediation entirely.' },
   { signal: 'What changed in the code recently?', coverage: 'full', tool: 'GitHub API or git_context table', desc: 'PRs merged in the last 24h. Column rename 4 hours ago is often the smoking gun.' },
   { signal: 'Is the upstream vendor having an outage?', coverage: 'full', tool: 'StatusPage APIs (real-time)', desc: 'Fivetran/Snowflake/dbt status pages checked in real-time. Vendor outage → wait, not debug.' },
+  { signal: 'Runbooks for primary + upstream pipelines', coverage: 'full', tool: 'Neon + Confluence/Notion MCP cascade search', desc: 'Cascade search: runbooks for the failing pipeline AND inferred upstream pipelines (Fivetran runbook when dbt fails).' },
+  { signal: 'Open Jira incidents for this pipeline', coverage: 'partial', tool: 'Atlassian Rovo MCP (hosted)', desc: 'Search P1/P2 Jira issues for this pipeline. Same Rovo OAuth session as Confluence.' },
   { signal: 'What did the upstream Fivetran sync load?', coverage: 'partial', tool: 'Fivetran API (self-hosted MCP)', desc: 'Row counts, sync status, 0-row silent failures. Requires Fivetran credentials + running the MCP locally.' },
   { signal: 'Which assets depend on the failing one?', coverage: 'partial', tool: 'Dagster asset graph only', desc: 'Downstream impact analysis. Available in Dagster. Other orchestrators: use dbt lineage or OpenLineage.' },
   { signal: 'What ran upstream in the last 2 hours?', coverage: 'partial', tool: 'Dagster list_runs + asset health check', desc: 'Implemented: checks recently-failed assets in the deployment. Gap: cross-orchestrator (Airflow + Dagster in same stack).' },
@@ -320,16 +322,29 @@ function getIntegrationStatus(): Integration[] {
     {
       id: 'confluence', group: 'knowledge', icon: '📖', name: 'Confluence',
       status: env('CONFLUENCE_BASE_URL') ? 'connected' : 'disabled',
-      description: 'Fan out runbook search to Confluence spaces.',
-      dataProvided: ['Runbook search via CQL', 'Architecture diagrams', 'Incident post-mortems'],
+      description: 'Fan out runbook search to Confluence spaces. Now available via Atlassian Rovo hosted MCP.',
+      dataProvided: ['Runbook search via CQL', 'Architecture diagrams + decision records', 'Post-mortem pages', 'Automatically improving as team updates docs'],
       envVars: ['CONFLUENCE_BASE_URL', 'CONFLUENCE_TOKEN', 'CONFLUENCE_SPACE_KEY'], file: 'lib/integrations/confluence.ts',
+      docsUrl: 'https://support.atlassian.com/atlassian-rovo-mcp-server/docs/getting-started-with-the-atlassian-remote-mcp-server/',
+      setupNote: '✅ HOSTED MCP: mcp.atlassian.com/v1/mcp/authv2 (OAuth) — covers Confluence + Jira in one connection',
+    },
+    {
+      id: 'jira', group: 'knowledge', icon: '🎫', name: 'Jira',
+      status: env('JIRA_API_TOKEN') ? 'connected' : 'disabled',
+      description: 'Search open incidents, create triage tickets, link related issues. Via Atlassian Rovo MCP (same connection as Confluence).',
+      dataProvided: ['Search open incidents: "any P1 issues for data pipelines?"', 'Create triage ticket from Dispatch report', 'Link Dagster run ID to Jira issue', 'Find related historical incidents in project tracker'],
+      envVars: ['JIRA_API_TOKEN (same Atlassian Rovo OAuth session)'], file: 'lib/integrations/jira.ts',
+      docsUrl: 'https://support.atlassian.com/atlassian-rovo-mcp-server/docs/getting-started-with-the-atlassian-remote-mcp-server/',
+      setupNote: '✅ HOSTED MCP: same mcp.atlassian.com connection as Confluence — Rovo covers both',
     },
     {
       id: 'notion', group: 'knowledge', icon: '📝', name: 'Notion',
       status: env('NOTION_API_KEY') ? 'connected' : 'disabled',
-      description: 'Pull runbooks and incident post-mortems from Notion databases.',
-      dataProvided: ['Runbook search', 'Incident history', 'On-call rotation info'],
-      envVars: ['NOTION_API_KEY', 'NOTION_DATABASE_ID'], file: 'lib/integrations/notion.ts',
+      description: 'Pull runbooks and incident post-mortems from Notion databases. Official hosted MCP.',
+      dataProvided: ['Runbook search across all Notion databases', 'Incident post-mortem lookup', 'On-call rotation and team wikis', 'Full workspace read/write access'],
+      envVars: ['NOTION_API_KEY'], file: 'lib/integrations/notion.ts',
+      docsUrl: 'https://developers.notion.com/guides/mcp/overview',
+      setupNote: '✅ HOSTED MCP: api.notion.com/mcp (OAuth one-click install)',
     },
     // Alerting
     {
