@@ -1,7 +1,81 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
+
+// -------------------------------------------------------------------
+// Live vendor status bar
+// -------------------------------------------------------------------
+interface VendorStatusResult {
+  vendor: string;
+  level: string;
+  description: string;
+  statusPageUrl: string;
+  activeIncidents?: Array<{ name: string }>;
+}
+
+function VendorStatusBar() {
+  const [vendors, setVendors] = useState<VendorStatusResult[]>([]);
+  const [hasIssues, setHasIssues] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch('/api/vendor-status')
+      .then(r => r.json())
+      .then(data => {
+        setVendors(data.vendors ?? []);
+        setHasIssues(data.hasIssues ?? false);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="mb-6 flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/30 px-4 py-2">
+        <svg className="h-3 w-3 animate-spin text-zinc-600" viewBox="0 0 24 24" fill="none">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+        </svg>
+        <span className="text-xs text-zinc-600">Checking vendor status...</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`mb-6 rounded-lg border px-4 py-2.5 ${
+      hasIssues ? 'border-amber-800/30 bg-amber-950/10' : 'border-zinc-800 bg-zinc-900/20'
+    }`}>
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs font-medium text-zinc-500 shrink-0">🌐 Vendor status</span>
+        {vendors.map(v => (
+          <a key={v.vendor} href={v.statusPageUrl} target="_blank" rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 text-xs transition hover:opacity-80"
+            title={v.description}>
+            <span className={`h-1.5 w-1.5 rounded-full ${
+              v.level === 'operational' ? 'bg-green-500' :
+              v.level === 'outage' ? 'bg-red-500' :
+              v.level === 'degraded' ? 'bg-amber-500' : 'bg-zinc-500'
+            }`} />
+            <span className={`capitalize ${
+              v.level === 'operational' ? 'text-zinc-500' :
+              v.level === 'outage' ? 'text-red-400 font-medium' :
+              v.level === 'degraded' ? 'text-amber-400 font-medium' : 'text-zinc-600'
+            }`}>{v.vendor}</span>
+            {v.activeIncidents && v.activeIncidents.length > 0 && (
+              <span className="text-red-400 text-xs">⚠️</span>
+            )}
+          </a>
+        ))}
+        {hasIssues && (
+          <span className="ml-auto text-xs text-amber-400">
+            Active incidents may affect eval results
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // Reuse the same markdown renderer and tool detail types as triage page
 function renderInline(text: string) {
@@ -294,10 +368,14 @@ export default function EvalsPage() {
           <span className="text-zinc-700">/</span>
           <span className="text-sm font-medium text-zinc-300">Evals</span>
         </div>
-        <Link href="/triage" className="text-xs text-zinc-600 hover:text-zinc-400 transition">Triage →</Link>
+        <div className="flex items-center gap-3">
+          <Link href="/triage" className="text-xs text-zinc-600 hover:text-zinc-400 transition">Triage →</Link>
+          <Link href="/settings" className="text-xs text-zinc-600 hover:text-zinc-400 transition">Settings →</Link>
+        </div>
       </header>
 
       <div className="mx-auto max-w-5xl px-6 py-8">
+        <VendorStatusBar />
         <div className="mb-8 flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-bold text-white mb-2">Eval Suite</h1>
