@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { Suspense } from 'react';
 
 // --- Types ---
 type SettingValue = { value: string | null; source: 'db' | 'env'; isSecret: boolean; isSet: boolean; updatedAt?: string };
@@ -146,6 +148,17 @@ const INTEGRATIONS: IntegrationDef[] = [
 const GROUPS = ['Orchestration', 'Ingestion', 'Transformation', 'Knowledge', 'Alerting'];
 
 export default function SettingsPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-zinc-950" />}>
+      <SettingsPageInner />
+    </Suspense>
+  );
+}
+
+function SettingsPageInner() {
+  const searchParams = useSearchParams();
+  const focusIntegration = searchParams.get('focus');
+  const prefillInstance = searchParams.get('instance') ?? 'default';
   const [savedSettings, setSavedSettings] = useState<SavedSettings>({});
   const [drafts, setDrafts] = useState<DraftSettings>({});
   const [newInstanceNames, setNewInstanceNames] = useState<Record<string, string>>({});
@@ -270,6 +283,20 @@ export default function SettingsPage() {
             Configure your data stack. Each integration shows <strong className="text-amber-400 font-medium">DEMO</strong> (synthetic data) or{' '}
             <strong className="text-green-400 font-medium">LIVE</strong> (real API). Secrets are encrypted with AES-256-GCM before storage.
           </p>
+          {focusIntegration && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-orange-800/40 bg-orange-950/10 px-3 py-2.5">
+              <span className="text-orange-400 shrink-0 text-sm">🔒</span>
+              <div>
+                <p className="text-xs font-medium text-orange-300">
+                  Connect <span className="capitalize font-bold">{focusIntegration}</span> to unlock that action in triage
+                </p>
+                <p className="text-xs text-orange-400/70 mt-0.5">
+                  Scroll to the <span className="capitalize font-medium">{focusIntegration}</span> section below and add your credentials.
+                  The action will be available immediately after saving.
+                </p>
+              </div>
+            </div>
+          )}
           <div className="mt-3 flex items-start gap-2 rounded-lg border border-blue-800/30 bg-blue-950/10 px-3 py-2">
             <span className="text-blue-400 text-sm shrink-0">🔐</span>
             <div>
@@ -306,7 +333,7 @@ export default function SettingsPage() {
                     const instances = getInstances(integration.id);
 
                     return (
-                      <div key={integration.id} className={`rounded-xl border overflow-hidden ${live ? 'border-green-800/30' : 'border-zinc-800'}`}>
+                      <div key={integration.id} className={`rounded-xl border overflow-hidden ${live ? 'border-green-800/30' : 'border-zinc-800'} ${focusIntegration === integration.id ? 'ring-2 ring-orange-500/50' : ''}`}>
                         {/* Integration header */}
                         <div className={`flex items-center gap-3 px-4 py-3 ${live ? 'bg-green-950/10' : 'bg-zinc-900/40'}`}>
                           <span className="text-lg">{integration.icon}</span>

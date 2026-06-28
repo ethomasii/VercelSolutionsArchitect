@@ -488,8 +488,25 @@ function ActionsPanel({ actions, rootCauseNote, pipelineName, reportText }: {
   reportText: string;
 }) {
   const [executing, setExecuting] = useState<string | null>(null);
-  const [results, setResults] = useState<Record<string, { ok: boolean; message?: string; error?: string; url?: string }>>({});
+  const [results, setResults] = useState<Record<string, { ok: boolean; message?: string; error?: string; url?: string; setup?: string }>>({});
   const [confirming, setConfirming] = useState<string | null>(null);
+  // Track which integrations are connected (fetched once on mount)
+  const [connectedIntegrations, setConnectedIntegrations] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    fetch('/api/settings')
+      .then(r => r.json())
+      .then((data: Record<string, Record<string, Record<string, { isSet?: boolean }>>>) => {
+        const connected = new Set<string>();
+        for (const [id, instances] of Object.entries(data)) {
+          for (const fields of Object.values(instances)) {
+            if (Object.values(fields).some(f => f.isSet)) connected.add(id);
+          }
+        }
+        setConnectedIntegrations(connected);
+      })
+      .catch(() => {});
+  }, []);
 
   const RISK_ICONS: Record<string, string> = { none: '📋', low: '⚡', medium: '⚠️' };
   const ACTION_ICONS: Record<string, string> = {
@@ -589,39 +606,84 @@ function ActionsPanel({ actions, rootCauseNote, pipelineName, reportText }: {
                 )}
               </div>
               <div className="shrink-0">
-                {isConfirming ? (
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-amber-400">Confirm?</span>
-                    <button onClick={() => execute(action)}
-                      className="rounded bg-orange-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-orange-500 transition">
-                      Yes, execute
+                {/* Check if this action requires an unconfigured integration */}
+                {(() => {
+                  const needsGitHub = action.id === 'create_pr';
+                  const needsFivetran = action.id === 'trigger_fivetran_sync';
+                  const needsDagster = action.id === 'rerun_dagster';
+                  const needsSlack = action.id === 'create_slack_alert';
+
+                  const isLocked =
+                    (needsGitHub && !connectedIntegrations.has('github')) ||
+                    (needsFivetran && !connectedIntegrations.has('fivetran')) ||
+                    (needsDagster && !connectedIntegrations.has('dagster')) ||
+                    (needsSlack && !connectedIntegrations.has('slack'));
+
+                  if (isLocked) {
+                    // Build pre-filled settings URL with known values
+                    const settingsParams = new URLSearchParams({ focus: needsGitHub ? 'github' : needsFivetran ? 'fivetran' : needsDagster ? 'dagster' : 'slack' });
+                    if (needsGitHub && action.params?.repoInstance) settingsParams.set('instance', action.params.repoInstance);
+                    const settingsUrl = `/settings?${settingsParams}`;
+
+                    return (
+                      <a href={settingsUrl}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-800/40 bg-amber-950/10 px-3 py-1.5 text-xs font-medium text-amber-400 transition hover:border-amber-700/60 hover:bg-amber-950/20">
+                        🔒 Connect {needsGitHub ? 'GitHub' : needsFivetran ? 'Fivetran' : needsDagster ? 'Dagster' : 'Slack'} to unlock
+                      </a>
+                    );
+                  }
+
+                  if (isConfirming) {
+                    return (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs text-amber-400">Confirm?</span>
+                        <button onClick={() => execute(action)}
+                          className="rounded bg-orange-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-orange-500 transition">
+                          Yes, execute
+                        </button>
+                        <button onClick={() => setConfirming(null)}
+                          className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 transition">
+                          Cancel
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  if (result) {
+                    return (
+                      <div className="flex flex-col items-end gap-1">
+                        <span className={`text-xs font-medium ${result.ok ? 'text-green-400' : 'text-red-400'}`}>
+                          {result.ok ? `✓ ${result.message}` : `✗ ${result.error?.slice(0, 60)}`}
+                        </span>
+                        {result.ok && result.url && (
+                          <a href={result.url} target="_blank" rel="noopener noreferrer"
+                            className="text-xs text-blue-400 underline">View PR →</a>
+                        )}
+                        {!result.ok && result.setup && (
+                          <a href="/settings" className="text-xs text-amber-400 underline">{result.setup}</a>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <button
+                      onClick={() => execute(action)}
+                      disabled={isExecuting}
+                      className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-orange-500/50 hover:text-zinc-100 hover:bg-orange-500/5 disabled:opacity-40"
+                    >
+                      {isExecuting ? (
+                        <span className="flex items-center gap-1.5">
+                          <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                          </svg>
+                          Running...
+                        </span>
+                      ) : action.requiresApproval ? 'Execute ▶' : 'Run'}
                     </button>
-                    <button onClick={() => setConfirming(null)}
-                      className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 transition">
-                      Cancel
-                    </button>
-                  </div>
-                ) : result ? (
-                  <span className={`text-xs ${result.ok ? 'text-green-500' : 'text-red-500'}`}>
-                    {result.ok ? '✓ Done' : '✗ Failed'}
-                  </span>
-                ) : (
-                  <button
-                    onClick={() => execute(action)}
-                    disabled={isExecuting}
-                    className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-orange-500/50 hover:text-zinc-100 hover:bg-orange-500/5 disabled:opacity-40"
-                  >
-                    {isExecuting ? (
-                      <span className="flex items-center gap-1.5">
-                        <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                        </svg>
-                        Running...
-                      </span>
-                    ) : action.requiresApproval ? 'Execute ▶' : 'Run'}
-                  </button>
-                )}
+                  );
+                })()}
               </div>
             </div>
           );
