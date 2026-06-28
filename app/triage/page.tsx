@@ -711,8 +711,68 @@ function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportTex
   // Extract proposeActions output for the actions panel
   const actionsPart = toolParts.find(p => p.type === 'tool-proposeActions');
   const actionsOutput = actionsPart?.output as { actions?: ProposedAction[]; rootCauseNote?: string } | undefined;
-  const proposedActions = actionsOutput?.actions ?? [];
-  const rootCauseNote = actionsOutput?.rootCauseNote;
+  let proposedActions = actionsOutput?.actions ?? [];
+  let rootCauseNote = actionsOutput?.rootCauseNote;
+
+  // AUTO-DERIVE ACTIONS: if proposeActions wasn't called by the model (common with complex runs),
+  // derive them from the available tool outputs — makes the Actions panel always appear
+  if (proposedActions.length === 0 && fullText) {
+    const classifyPart2 = toolParts.find(p => p.type === 'tool-classifyFailure');
+    const classifyOut = (classifyPart2?.output ?? classifyPart2?.input) as {
+      failureType?: string; affectedPipeline?: string; confidence?: number;
+    } | undefined;
+    const gitPart = toolParts.find(p => p.type === 'tool-searchGitContext');
+    const gitOut = gitPart?.output as {
+      commits?: Array<{ isLikelyCause?: boolean; message?: string; sha?: string }>;
+    } | undefined;
+    const incidentPart = toolParts.find(p => p.type === 'tool-lookupIncidentHistory');
+    const incidentOut = incidentPart?.output as { knownFlaky?: boolean; totalIncidents?: number } | undefined;
+
+    const causePR = gitOut?.commits?.find(c => c.isLikelyCause);
+    const ft = classifyOut?.failureType ?? 'unknown';
+
+    const derived: ProposedAction[] = [];
+
+    // Code regression with a smoking-gun PR → offer to revert or fix
+    if (causePR && (ft === 'code_regression' || ft === 'schema_mismatch')) {
+      derived.push({
+        id: 'create_pr',
+        label: `Open PR: revert "${causePR.message?.slice(0, 50)}"`,
+        description: `Revert the config/code change from ${causePR.sha?.slice(0,7)} that appears to have caused this failure.`,
+        risk: 'low',
+        actionConfidence: 'High',
+        requiresApproval: true,
+        params: { sha: causePR.sha ?? '', message: causePR.message ?? '' },
+      });
+    }
+
+    // Network timeout with recent batch size increase → revert config
+    if (ft === 'network_timeout' && causePR?.message?.toLowerCase().includes('batch')) {
+      rootCauseNote = 'Batch size increase likely caused API rate limiting — the PR is the root cause, not the API.';
+      derived.push({
+        id: 'create_pr',
+        label: 'Revert batch size config change',
+        description: 'Revert config.yaml batch size to previous value while investigating API rate limits.',
+        risk: 'low',
+        actionConfidence: 'High',
+        requiresApproval: true,
+        params: { message: causePR.message ?? '' },
+      });
+    }
+
+    // Known flaky → mark resolved, slack
+    if (incidentOut?.knownFlaky) {
+      rootCauseNote = 'This is a known flaky pipeline — wait for it to resolve before escalating.';
+      derived.push({ id: 'mark_resolved', label: 'Mark as resolved (known flaky)', description: 'Close the incident — this pipeline self-resolves.', risk: 'none', actionConfidence: 'High', requiresApproval: false });
+    }
+
+    // Always offer Slack + Jira for high-confidence failures
+    if ((classifyOut?.confidence ?? 0) > 0.5) {
+      derived.push({ id: 'create_slack_alert', label: 'Post to #data-alerts', description: 'Notify the team about this failure with the triage report.', risk: 'none', actionConfidence: 'High', requiresApproval: false });
+    }
+
+    if (derived.length > 0) proposedActions = derived;
+  }
 
   // Extract pipeline name from classifyFailure for the remediation API
   const classifyPart = toolParts.find(p => p.type === 'tool-classifyFailure');
