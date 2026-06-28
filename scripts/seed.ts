@@ -665,7 +665,9 @@ Credentials are stored in AWS Secrets Manager (secret: prod/etl-svc-acct) — no
                                author, changed_files, committed_at, is_likely_cause, source)
       VALUES ('default', ${g.pipeline_name}, ${g.commit_sha}, ${g.pr_number}, ${g.pr_title},
               ${g.author}, ${g.changed_files}, ${g.committed_at}, ${g.is_likely_cause}, ${g.source})
-      ON CONFLICT DO NOTHING
+      ON CONFLICT ON CONSTRAINT git_context_unique
+      DO UPDATE SET pr_title = EXCLUDED.pr_title, is_likely_cause = EXCLUDED.is_likely_cause,
+                    committed_at = EXCLUDED.committed_at
     `;
   }
   console.log(`✅ Inserted ${gitRows.length} git context rows`);

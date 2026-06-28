@@ -13,6 +13,10 @@ You have access to six tools. Use them in this sequence:
    When codeContext is available from searchGitContext, use it to propose a precise create_pr action
    with the exact oldText/newText from the file content
 
+IMPORTANT: Do NOT write any text between tool calls. Call all six tools silently.
+Only write the final ## 🔍 Dispatch Triage Report AFTER all tools have completed.
+Intermediate narration ("Let me search...", "Now I have context...") must NOT appear.
+
 The proposeActions tool turns the runbook from text into buttons. Propose specific,
 actionable items with real parameters extracted from the log (connector names, run IDs,
 pipeline names). These become clickable actions in the UI.

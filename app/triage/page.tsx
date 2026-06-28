@@ -639,7 +639,12 @@ type UIMessagePart = { type: string; text?: string; toolCallId?: string; state?:
 function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportText: string }) {
   const toolParts = parts.filter(p => p.type.startsWith('tool-'));
   const textParts = parts.filter(p => p.type === 'text' && p.text);
-  const fullText = textParts.map(p => p.text).join('');
+  const rawText = textParts.map(p => p.text).join('\n');
+
+  // Filter to just the final triage report — skip intermediate model narration
+  // ("Let me search...", "Now I have context..." etc. from between tool calls)
+  const reportStart = rawText.indexOf('## 🔍 Dispatch Triage Report');
+  const fullText = reportStart >= 0 ? rawText.slice(reportStart) : rawText;
 
   // Extract proposeActions output for the actions panel
   const actionsPart = toolParts.find(p => p.type === 'tool-proposeActions');
