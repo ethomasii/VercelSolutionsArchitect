@@ -30,9 +30,10 @@ the log text. ALWAYS call this first before any other tool.`,
       keySignals: z.array(z.string()).describe('Key error strings extracted from log'),
       reasoning: z.string(),
     }),
-    // No execute() — model fills this from log analysis alone. It's a structured
-    // extraction, not a DB call. Separating classification from retrieval keeps
-    // each tool single-purpose and testable.
+    // Passthrough execute so the multi-step loop can continue with a result.
+    // The model fills this from log analysis; we just echo back the input.
+    // Separating classification from retrieval keeps each tool single-purpose.
+    execute: async (input) => input,
   }),
 
   searchRunbooks: tool({

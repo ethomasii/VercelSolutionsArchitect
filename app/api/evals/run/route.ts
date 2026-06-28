@@ -15,7 +15,10 @@ export async function GET() {
   `;
 
   if (cases.length === 0) {
-    return Response.json({ error: 'No eval cases found. Run scripts/seed.ts first.' }, { status: 404 });
+    return Response.json(
+      { error: 'No eval cases found. Run scripts/seed.ts first.' },
+      { status: 404 }
+    );
   }
 
   const results = [];
@@ -31,66 +34,86 @@ export async function GET() {
         stopWhen: isStepCount(8),
       });
 
-      // Collect all tool calls from all steps
-      type RawToolCall = { toolName: string; input?: Record<string, unknown>; toolCallId: string; dynamic?: boolean; result?: unknown };
-      const toolCalls: Array<{ toolName: string; args: Record<string, unknown>; result: unknown }> = [];
+      // In AI SDK v7: tool calls have `input`, tool results have `output`
+      type TC = {
+        toolCallId: string;
+        toolName: string;
+        input: Record<string, unknown>;
+        dynamic?: boolean;
+      };
+      type TR = {
+        toolCallId: string;
+        toolName: string;
+        output: unknown;
+      };
+
+      interface Collected {
+        toolName: string;
+        input: Record<string, unknown>;
+        output: unknown;
+      }
+
+      const collected: Collected[] = [];
+
       for (const step of steps) {
-        for (const toolCall of step.toolCalls ?? []) {
-          if (toolCall.dynamic) continue;
-          const tc = toolCall as unknown as RawToolCall;
-          const result = step.toolResults?.find(r => r.toolCallId === tc.toolCallId);
-          toolCalls.push({
+        for (const rawCall of step.toolCalls ?? []) {
+          const tc = rawCall as unknown as TC;
+          if (tc.dynamic) continue;
+          const tr = (step.toolResults as unknown as TR[] | undefined)?.find(
+            r => r.toolCallId === tc.toolCallId
+          );
+          collected.push({
             toolName: tc.toolName,
-            args: tc.input ?? {},
-            result: (result as { result?: unknown } | undefined)?.result,
+            input: tc.input ?? {},
+            output: tr?.output,
           });
         }
       }
 
-      // Extract final text response
-      const finalText = steps[steps.length - 1]?.text ?? '';
+      // Collect text from ALL steps — the final narrative may not be in the last step
+      const fullText = steps
+        .map(s => s.text)
+        .filter(Boolean)
+        .join('\n');
 
-      // Score the eval
-      const classifyCall = toolCalls.find(t => t.toolName === 'classifyFailure');
-      const classifyArgs = classifyCall?.args as { failureType?: string; confidence?: number } | undefined;
-      const gotFailureType = classifyArgs?.failureType ?? null;
-      const confidence = classifyArgs?.confidence ?? 0;
+      // --- Scoring ---
 
-      const runbookCall = toolCalls.find(t => t.toolName === 'searchRunbooks');
-      const runbookResult = runbookCall?.result as { found?: boolean } | undefined;
-      const runbookFound = runbookResult?.found ?? false;
+      const classifyEntry = collected.find(t => t.toolName === 'classifyFailure');
+      // classifyFailure echoes its input as output; use either
+      const classifyData = (classifyEntry?.output ?? classifyEntry?.input) as
+        | { failureType?: string; confidence?: number }
+        | undefined;
+      const gotFailureType = classifyData?.failureType ?? null;
+      const confidence = classifyData?.confidence ?? 0;
 
-      const gitCall = toolCalls.find(t => t.toolName === 'searchGitContext');
-      const gitResult = gitCall?.result as {
+      const runbookEntry = collected.find(t => t.toolName === 'searchRunbooks');
+      const runbookOutput = runbookEntry?.output as { found?: boolean } | undefined;
+      const runbookFound = runbookOutput?.found ?? false;
+
+      const gitEntry = collected.find(t => t.toolName === 'searchGitContext');
+      const gitOutput = gitEntry?.output as {
         commits?: Array<{ isLikelyCause?: boolean }>;
       } | undefined;
       const foundGitCause =
-        gitResult?.commits?.some((c: { isLikelyCause?: boolean }) => c.isLikelyCause) ?? false;
+        gitOutput?.commits?.some(c => c.isLikelyCause) ?? false;
 
-      // Check keywords present in response
       const expectedKeywords: string[] = evalCase.expected_keywords ?? [];
       const keywordsPass =
         expectedKeywords.length === 0 ||
         expectedKeywords.every(kw =>
-          finalText.toLowerCase().includes(kw.toLowerCase())
+          fullText.toLowerCase().includes(kw.toLowerCase())
         );
 
-      // Check forbidden patterns absent from response
       const forbiddenPatterns: string[] = evalCase.forbidden_patterns ?? [];
       const forbiddenPass =
         forbiddenPatterns.length === 0 ||
-        !forbiddenPatterns.some(p =>
-          finalText.toLowerCase().includes(p.toLowerCase())
-        );
+        !forbiddenPatterns.some(p => fullText.toLowerCase().includes(p.toLowerCase()));
 
       const typeCorrect = gotFailureType === evalCase.expected_failure_type;
-      const runbookCorrect =
-        !evalCase.should_find_runbook || runbookFound;
-      const gitCorrect =
-        !evalCase.should_find_git_cause || foundGitCause;
+      const runbookCorrect = !evalCase.should_find_runbook || runbookFound;
+      const gitCorrect = !evalCase.should_find_git_cause || foundGitCause;
 
-      const passed =
-        typeCorrect && runbookCorrect && gitCorrect && keywordsPass && forbiddenPass;
+      const passed = typeCorrect && runbookCorrect && gitCorrect && keywordsPass && forbiddenPass;
 
       results.push({
         id: evalCase.id,
@@ -103,7 +126,7 @@ export async function GET() {
         keywordsPass,
         forbiddenPass,
         passed,
-        responsePreview: finalText.slice(0, 300),
+        responsePreview: fullText.slice(0, 300),
       });
     } catch (err) {
       results.push({

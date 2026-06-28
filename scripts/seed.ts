@@ -613,12 +613,14 @@ that break enum constraints in our dbt tests.`,
     {
       name: 'Snowflake permission denied — quarterly rotation',
       input_log: `ERROR 2026-06-28 06:15:44 UTC [snowflake] Pipeline failed: snowflake_raw_ingestion
-  sqlalchemy.exc.ProgrammingError: (snowflake.connector.errors.ProgrammingError) 002003 (42S02):
-  SQL compilation error: Object 'RAW.SALESFORCE.ACCOUNTS' does not exist or not authorized.
-  User: DISPATCH_SVC_ACCT
-  Role: DISPATCH_ROLE
-  Error code: 002003
-  Pipeline: snowflake_raw_ingestion`,
+sqlalchemy.exc.ProgrammingError: (snowflake.connector.errors.ProgrammingError) 003001 (42501):
+Insufficient privileges to operate on schema 'RAW.SALESFORCE'
+User: DISPATCH_SVC_ACCT
+Role: DISPATCH_ROLE
+Error code: 003001 (permission denied)
+Message: Access to SCHEMA 'RAW.SALESFORCE' is denied for user DISPATCH_SVC_ACCT
+Note: Credentials were last rotated 91 days ago — quarterly rotation may be overdue
+Pipeline: snowflake_raw_ingestion`,
       expected_failure_type: 'permission_denied',
       expected_keywords: ['credential', 'rotation', 'quarterly'],
       forbidden_patterns: [],
