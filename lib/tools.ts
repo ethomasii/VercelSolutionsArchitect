@@ -45,41 +45,52 @@ Call after classifyFailure. Returns matching runbook entries with remediation st
       keywords: z.array(z.string()),
     }),
     execute: async ({ failureType, pipelineName, keywords }) => {
-      const orgId = 'default'; // TODO: pull from request context via middleware
+      const orgId = 'default';
 
-      // Today: full-text search against Neon runbooks table.
-      // Near-term upgrade: switch to vector similarity (<=> cosine) when
-      // embedding column is populated. Tool interface doesn't change at all —
-      // only this query changes.
-      // Longer-term: fan out to Confluence via searchConfluence() and merge results.
-      const searchTerm = [failureType, pipelineName, ...keywords]
-        .filter(Boolean)
-        .join(' ');
-
+      // Primary: exact match on failure_type — this is fast and reliable since
+      // classifyFailure is already 90%+ accurate. The failure_type is the key
+      // signal; full-text search over AI-extracted keywords produces false negatives
+      // because plainto_tsquery requires ALL terms (AND semantics) to appear in the
+      // runbook, and terms like "dim_customers" or "does not exist" are log-specific,
+      // not runbook-specific.
       const rows = await sql`
         SELECT title, content, remediation_steps, last_updated, author,
-               ts_rank(to_tsvector('english', content || ' ' || title),
-                       plainto_tsquery('english', ${searchTerm})) as rank
+               'failure_type_match' as match_reason
         FROM runbooks
         WHERE org_id = ${orgId}
-          AND to_tsvector('english', content || ' ' || title)
-              @@ plainto_tsquery('english', ${searchTerm})
-        ORDER BY rank DESC
+          AND failure_type = ${failureType}
+        ORDER BY last_updated DESC
         LIMIT 3
       `;
 
+      // Fallback: broader text search on just failureType + pipelineName if no exact match
+      const fallbackRows =
+        rows.length === 0
+          ? await sql`
+              SELECT title, content, remediation_steps, last_updated, author,
+                     'text_search' as match_reason
+              FROM runbooks
+              WHERE org_id = ${orgId}
+                AND to_tsvector('english', content || ' ' || title)
+                    @@ plainto_tsquery('english', ${[failureType, pipelineName].filter(Boolean).join(' ')})
+              ORDER BY last_updated DESC
+              LIMIT 3
+            `
+          : [];
+
       // Also query Confluence if configured (returns [] today if not set).
-      const confluenceResults = await searchConfluence(searchTerm, failureType);
+      const confluenceResults = await searchConfluence(failureType, failureType);
 
       const allResults = [
         ...rows.map(r => ({ ...r, source: 'internal_runbook' })),
+        ...fallbackRows.map(r => ({ ...r, source: 'internal_runbook' })),
         ...confluenceResults,
       ];
 
       return {
         found: allResults.length > 0,
         runbooks: allResults,
-        searchTerm,
+        searchTerm: failureType,
       };
     },
   }),
@@ -95,17 +106,30 @@ Critical for identifying known-flaky pipelines and recurring patterns.`,
     execute: async ({ failureType, pipelineName, lookbackDays }) => {
       const orgId = 'default';
 
-      const rows = await sql`
-        SELECT pipeline_name, failure_type, occurred_at, resolved_at,
-               resolution_summary, root_cause, known_flaky, resolved_by
-        FROM incidents
-        WHERE org_id = ${orgId}
-          AND failure_type = ${failureType}
-          AND (${pipelineName ?? null} IS NULL OR pipeline_name = ${pipelineName ?? null})
-          AND occurred_at > now() - (${lookbackDays} || ' days')::interval
-        ORDER BY occurred_at DESC
-        LIMIT 10
-      `;
+      // Avoid passing undefined as a SQL parameter — Neon's driver may not handle
+      // it correctly. Build two separate queries instead.
+      const rows = pipelineName
+        ? await sql`
+            SELECT pipeline_name, failure_type, occurred_at, resolved_at,
+                   resolution_summary, root_cause, known_flaky, resolved_by
+            FROM incidents
+            WHERE org_id = ${orgId}
+              AND failure_type = ${failureType}
+              AND pipeline_name = ${pipelineName}
+              AND occurred_at > now() - (${lookbackDays} || ' days')::interval
+            ORDER BY occurred_at DESC
+            LIMIT 10
+          `
+        : await sql`
+            SELECT pipeline_name, failure_type, occurred_at, resolved_at,
+                   resolution_summary, root_cause, known_flaky, resolved_by
+            FROM incidents
+            WHERE org_id = ${orgId}
+              AND failure_type = ${failureType}
+              AND occurred_at > now() - (${lookbackDays} || ' days')::interval
+            ORDER BY occurred_at DESC
+            LIMIT 10
+          `;
 
       const knownFlaky = rows.some(r => r.known_flaky);
       const resolvedRows = rows.filter(r => r.resolved_at);
