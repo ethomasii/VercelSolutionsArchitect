@@ -29,10 +29,8 @@ export async function POST(req: Request) {
     messages: await convertToModelMessages(messages),
     tools: dispatchTools,
     providerOptions: gatewayOptions,
-    // stopWhen: isStepCount(8) gives headroom for the 4-tool sequence plus
-    // any retry steps if the model needs to refine a tool call. In practice
-    // this runs in 4-5 steps. Cap prevents runaway loops.
-    stopWhen: isStepCount(8),
+    // 12 steps: 6 tools × 1-2 LLM steps each + final report. 8 was too tight.
+    stopWhen: isStepCount(12),
     onStepEnd({ stepNumber, toolCalls, usage }) {
       // Step callbacks are our observability hook.
       // Today: console.log for development visibility.

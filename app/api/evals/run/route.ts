@@ -65,7 +65,7 @@ export async function GET() {
                 prompt: evalCase.input_log,
                 tools: dispatchTools,
                 providerOptions: gatewayOptions,
-                stopWhen: isStepCount(8),
+                stopWhen: isStepCount(12),
                 // Emit a step event after each tool call so the UI can show progress
                 onStepEnd: ({ toolCalls }) => {
                   for (const tc of toolCalls ?? []) {
