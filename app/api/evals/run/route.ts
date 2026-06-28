@@ -47,10 +47,9 @@ export async function GET() {
       push(controller, { type: 'start', total: cases.length });
       let passCount = 0;
 
-      // Run sequentially with a 500ms gap — prevents AI Gateway rate limit errors
-      // when running 8 cases back-to-back on the free tier
-      const BATCH_SIZE = 1;
-      const BATCH_DELAY_MS = 500;
+      // 2 parallel now that AI Gateway credits are active — was 1 during rate limiting
+      const BATCH_SIZE = 2;
+      const BATCH_DELAY_MS = 300;
       for (let i = 0; i < cases.length; i += BATCH_SIZE) {
         const batch = cases.slice(i, i + BATCH_SIZE);
 

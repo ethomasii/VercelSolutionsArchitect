@@ -102,22 +102,28 @@ encode the institutional knowledge that no tool captures automatically.`,
             ORDER BY last_updated DESC LIMIT 3
           `;
 
-      // Cascade: search runbooks for each inferred upstream pipeline
-      // Key insight: even though dbt's log doesn't mention Fivetran, if Fivetran
-      // failed upstream, its runbook explains the root cause.
+      // Cascade: search runbooks for each inferred upstream pipeline.
+      // Dedup in JS — Postgres != ALL(array) can misfire with special characters (em dashes, etc.)
       const upstreamResults: typeof primaryRows = [];
+      const seenTitles = new Set(primaryRows.map(r => r.title as string));
+
       for (const upstreamPipeline of upstreamPipelines.slice(0, 3)) {
         const upstreamTag = upstreamPipeline.split('_')[0].toLowerCase();
-        const existingTitles = primaryRows.map(r => r.title as string);
         const rows = await sql`
           SELECT title, content, remediation_steps, last_updated, author, 8 AS score
           FROM runbooks
           WHERE org_id = ${orgId}
             AND ${upstreamTag} = ANY(pipeline_tags)
-            AND title != ALL(${existingTitles})
-          ORDER BY last_updated DESC LIMIT 2
+          ORDER BY last_updated DESC LIMIT 4
         `;
-        upstreamResults.push(...rows);
+        for (const row of rows) {
+          const title = row.title as string;
+          if (!seenTitles.has(title)) {
+            seenTitles.add(title);
+            upstreamResults.push(row);
+            if (upstreamResults.length >= 2) break;
+          }
+        }
       }
 
       // Fallback text search
