@@ -786,12 +786,12 @@ Pipeline: snowflake_raw_ingestion`,
   Root model: stg_orders (sourced from RAW.FIVETRAN.ORDERS)
   Note: fivetran_orders_daily failed to sync 2 hours ago (rate limited)
   Pipeline: payments_dbt_pipeline`,
-      expected_failure_type: 'dbt_test_failure',
+      expected_failure_type: 'upstream_data_missing',
       expected_keywords: ['Fivetran', 'upstream', 'root cause'],
       forbidden_patterns: ['fix the dbt model'],
       should_find_runbook: true,
       should_find_git_cause: false,
-      notes: 'Immediate failure IS dbt_test_failure; agent must identify Fivetran upstream root cause in response.',
+      notes: 'Model correctly classifies as upstream_data_missing when it identifies Fivetran as root cause. Keywords validate the cascade narrative.',
     },
     {
       name: 'Ambiguous log — insufficient info',

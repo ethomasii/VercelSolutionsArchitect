@@ -140,12 +140,21 @@ encode the institutional knowledge that no tool captures automatically.`,
 
       const confluenceResults = await searchConfluence(failureType, failureType);
 
-      const allResults = [
+      const allResultsRaw = [
         ...primaryRows.map(r => ({ ...r, source: 'internal_runbook', context: 'primary' })),
         ...upstreamResults.map(r => ({ ...r, source: 'internal_runbook', context: 'upstream_pipeline' })),
         ...fallbackRows.map(r => ({ ...r, source: 'internal_runbook', context: 'text_search' })),
         ...confluenceResults,
       ];
+
+      // Final dedup by title — ensures no duplicate runbooks regardless of search path
+      const finalTitles = new Set<string>();
+      const allResults = allResultsRaw.filter(r => {
+        const title = (r as { title?: string }).title ?? '';
+        if (finalTitles.has(title)) return false;
+        finalTitles.add(title);
+        return true;
+      });
 
       return {
         found: allResults.length > 0,
