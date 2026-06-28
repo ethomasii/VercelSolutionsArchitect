@@ -30,14 +30,15 @@ dependency graph and CONCURRENT WORKLOAD section, not just the error line.
 
 Classification guidance for ambiguous cases:
 - "does not exist or not authorized" with a named User/Role → permission_denied
-  (Snowflake 002003/42S02 can mean either missing object OR access denied;
-  when a service account (e.g., DISPATCH_SVC_ACCT, svc_user) and Role are present,
-  lean toward permission_denied)
 - "Access Denied", "insufficient privileges", "403 Forbidden" → permission_denied
 - "0 rows loaded", "No new data", "connector SYNCING" → upstream_data_missing
 - "column X does not exist", "KeyError", "schema change" → schema_mismatch
 - "ref is undefined", "not found" in dbt compile output → dbt_compilation_error
-- "timeout", "cluster auto-suspend", "out of memory" → resource_exhaustion`,
+- "timeout", "cluster auto-suspend", "out of memory" → resource_exhaustion
+- STEP_FAILURE + max_retries exhausted + step calls external API → network_timeout
+- STEP_FAILURE + recent config change (batch size, parallelism) + API failure → code_regression
+  (the config change is the root cause — increased batch size hit API rate limits)
+- STEP_FAILURE with no other signals → unknown (still call all 6 tools)`,
     inputSchema: z.object({
       failureType: z.enum([
         'upstream_data_missing',
