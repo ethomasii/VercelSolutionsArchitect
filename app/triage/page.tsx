@@ -483,6 +483,7 @@ function ActionsPanel({ actions, pipelineName, reportText }: {
     create_slack_alert: '💬',
     mark_resolved: '✓',
     open_dashboard: '↗',
+    create_pr: '⎇',
     custom: '▶',
   };
 
@@ -540,9 +541,27 @@ function ActionsPanel({ actions, pipelineName, reportText }: {
                   }`}>{RISK_ICONS[action.risk]} {action.risk}</span>
                 </div>
                 <p className="text-xs text-zinc-500 mt-0.5">{action.description}</p>
+                {/* Diff preview for create_pr actions */}
+                {action.id === 'create_pr' && action.params?.oldText && action.params?.newText && (
+                  <div className="mt-1.5 rounded bg-zinc-950 border border-zinc-800 px-2.5 py-2 font-mono text-xs">
+                    <div className="text-zinc-600 mb-1">{action.params.filePath}</div>
+                    <div className="text-red-400">- {action.params.oldText}</div>
+                    <div className="text-green-400">+ {action.params.newText}</div>
+                  </div>
+                )}
                 {result && (
                   <p className={`text-xs mt-1 font-medium ${result.ok ? 'text-green-400' : 'text-red-400'}`}>
-                    {result.ok ? `✓ ${result.message}` : `✗ ${result.error}`}
+                    {result.ok ? (
+                      <>
+                        ✓ {result.message}
+        {(result as { url?: string }).url && (
+                          <a href={(result as { url?: string }).url ?? '#'} target="_blank" rel="noopener noreferrer"
+                            className="ml-2 text-blue-400 underline">
+                            View PR →
+                          </a>
+                        )}
+                      </>
+                    ) : `✗ ${result.error}`}
                   </p>
                 )}
               </div>

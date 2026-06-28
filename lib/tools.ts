@@ -340,6 +340,11 @@ For each action:
 Action types and when to propose them:
 - "rerun_dagster": resource_exhaustion or code_regression where retrying makes sense
 - "trigger_fivetran_sync": upstream_data_missing + Fivetran identified
+- "create_pr": code_regression or schema_mismatch where the fix is deterministic
+  (you know the old value AND the new value from the git context)
+  Include: filePath, oldText (exact string to replace), newText, branchName, prTitle, prBody
+  Example: PR renamed customer_segment→customer_tier, dbt ref still says customer_segment
+  → create_pr to fix that one line. Include the full triage report in prBody.
 - "create_jira_ticket": any High confidence failure worth tracking  
 - "create_slack_alert": always useful to notify the team
 - "mark_resolved": when the runbook says "wait and monitor"
@@ -349,7 +354,7 @@ Action types and when to propose them:
       affectedPipeline: z.string(),
       confidence: z.enum(['High', 'Medium', 'Low']),
       actions: z.array(z.object({
-        id: z.enum(['rerun_dagster', 'trigger_fivetran_sync', 'create_jira_ticket', 'create_slack_alert', 'mark_resolved', 'open_dashboard', 'custom']),
+        id: z.enum(['rerun_dagster', 'trigger_fivetran_sync', 'create_jira_ticket', 'create_slack_alert', 'mark_resolved', 'open_dashboard', 'create_pr', 'custom']),
         label: z.string().describe('Short button label, e.g. "Trigger Fivetran re-sync"'),
         description: z.string().describe('One sentence: what this does and why'),
         risk: z.enum(['none', 'low', 'medium']),
