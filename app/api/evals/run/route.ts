@@ -5,9 +5,29 @@ import { dispatchTools } from '@/lib/tools';
 import { DISPATCH_SYSTEM_PROMPT } from '@/lib/system-prompt';
 
 export const runtime = 'nodejs';
-export const maxDuration = 300; // 5 min — 8 cases × ~15s each, some parallel
+export const maxDuration = 300;
 
 type ContentPart = Record<string, unknown>;
+
+// Retry with exponential backoff for rate limit errors
+async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const isRateLimit = msg.includes('RateLimit') || msg.includes('rate_limit') || msg.includes('429');
+      if (!isRateLimit || attempt === maxAttempts) throw err;
+      // Exponential backoff: 2s, 4s, 8s
+      const delay = Math.pow(2, attempt) * 1000;
+      console.log(`[eval] Rate limited, retrying in ${delay}ms (attempt ${attempt}/${maxAttempts})`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw lastError;
+}
 
 export async function GET() {
   const cases = await sql`
@@ -27,9 +47,9 @@ export async function GET() {
       push(controller, { type: 'start', total: cases.length });
       let passCount = 0;
 
-      // Run in batches of 3 — parallelism cuts total time from ~120s to ~40s
-      // while staying within per-case timeout budget
-      const BATCH_SIZE = 3;
+      // Run in batches of 2 to avoid rate limiting — 3 simultaneous requests
+      // hit the AI Gateway free tier per-minute RPM limit
+      const BATCH_SIZE = 2;
       for (let i = 0; i < cases.length; i += BATCH_SIZE) {
         const batch = cases.slice(i, i + BATCH_SIZE);
 
@@ -39,7 +59,7 @@ export async function GET() {
             push(controller, { type: 'case-start', name: evalCase.name });
 
             try {
-              const { steps } = await generateText({
+              const { steps } = await withRetry(() => generateText({
                 model: getPrimaryModel(),
                 system: DISPATCH_SYSTEM_PROMPT,
                 prompt: evalCase.input_log,
@@ -58,7 +78,7 @@ export async function GET() {
                     }
                   }
                 },
-              });
+              }));
 
               // Collect tool inputs/outputs from content
               const toolInputs: Record<string, Record<string, unknown>> = {};

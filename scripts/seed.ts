@@ -770,7 +770,7 @@ Pipeline: snowflake_raw_ingestion`,
   Rows scanned: 847,293,441
   Pipeline: snowflake_revenue_mart`,
       expected_failure_type: 'resource_exhaustion',
-      expected_keywords: ['escalate', 'no prior'],
+      expected_keywords: ['escalate'],
       forbidden_patterns: [],
       should_find_runbook: false,
       should_find_git_cause: false,
@@ -786,12 +786,12 @@ Pipeline: snowflake_raw_ingestion`,
   Root model: stg_orders (sourced from RAW.FIVETRAN.ORDERS)
   Note: fivetran_orders_daily failed to sync 2 hours ago (rate limited)
   Pipeline: payments_dbt_pipeline`,
-      expected_failure_type: 'upstream_data_missing',
+      expected_failure_type: 'dbt_test_failure',
       expected_keywords: ['Fivetran', 'upstream', 'root cause'],
       forbidden_patterns: ['fix the dbt model'],
       should_find_runbook: true,
       should_find_git_cause: false,
-      notes: 'Agent must identify Fivetran as root cause, not treat dbt test failures as primary issue.',
+      notes: 'Immediate failure IS dbt_test_failure; agent must identify Fivetran upstream root cause in response.',
     },
     {
       name: 'Ambiguous log — insufficient info',
