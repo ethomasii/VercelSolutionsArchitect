@@ -5,7 +5,7 @@ import { DefaultChatTransport } from 'ai';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { SAMPLE_RUN_IDS } from '@/lib/run-context';
+import { SAMPLE_RUN_IDS } from '@/lib/run-context-samples';
 
 // -------------------------------------------------------------------
 // Lightweight markdown renderer
