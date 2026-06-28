@@ -38,6 +38,11 @@ export const SAMPLE_RUN_IDS: Array<{ id: string; label: string; description: str
     label: 'Airflow-orchestrated dbt timeout (resource contention)',
     description: 'Airflow triggered dbt at the same time as another heavy Snowflake job. Warehouse contention caused timeout on a model that usually runs in 2 minutes.',
   },
+  {
+    id: 'dag-run-snowflake-lineage',
+    label: 'Snowflake table freshness failure — trace upstream across 4 tools',
+    description: 'RAW.SHOPIFY.ORDERS stale in Snowflake. Need to check: Fivetran sync → dbt sources → Dagster asset → upstream Shopify API. Classic cross-vendor lineage problem.',
+  },
 ];
 
 export async function resolveRunId(runId: string): Promise<RunContext | null> {
@@ -57,6 +62,10 @@ export async function resolveRunId(runId: string): Promise<RunContext | null> {
   }
   if (normalized.includes('airflow-dbt')) {
     return buildAirflowDbtContext(runId);
+  }
+
+  if (normalized.includes('snowflake-lineage')) {
+    return buildSnowflakeLineageContext(runId);
   }
 
   return null;
@@ -190,7 +199,77 @@ Orchestrator context source: simulated (wire up Dagster MCP for real data)`;
 }
 
 // -------------------------------------------------------------------
-// Scenario 3: Airflow-orchestrated dbt timeout
+// Scenario 4: Snowflake table freshness failure — full cross-vendor lineage
+// The alert fires on Snowflake but the root cause is 4 hops upstream.
+// Demonstrates why you need cross-tool context, not just the error.
+// -------------------------------------------------------------------
+function buildSnowflakeLineageContext(runId: string): RunContext {
+  const now = new Date();
+  const failedAt = new Date(now.getTime() - 35 * 60000).toISOString();
+  const startedAt = new Date(now.getTime() - 50 * 60000).toISOString();
+
+  const enrichedPrompt = `Triage pipeline failure for run: ${runId}
+
+ALERT SOURCE: Snowflake data freshness monitor
+- Monitor: RAW.SHOPIFY.ORDERS freshness check
+- Condition: MAX(created_at) < now() - interval '3 hours'
+- Alert fired at: ${failedAt}
+- Last fresh data: ${new Date(now.getTime() - 6 * 3600000).toISOString()}
+
+CROSS-VENDOR LINEAGE (from dbt sources.yml + Dagster asset graph):
+
+  Shopify API
+    └── Fivetran connector: orders_shopify
+        └── RAW.SHOPIFY.ORDERS  ← this is where the alert fired
+            └── stg_orders (dbt staging model)
+                └── fct_orders (dbt mart)  ← 14 downstream dbt models affected
+                    └── dbt_orders_mart (Dagster asset)
+                        └── revenue_report, inventory_dashboard (downstream)
+
+HOW THIS LINEAGE WAS BUILT:
+  - dbt/models/staging/shopify/sources.yml → maps Fivetran connector to RAW table
+  - dbt ref() chains → stg_orders → fct_orders lineage
+  - Dagster asset graph → dbt_orders_mart depends on fct_orders
+  - 14 downstream assets will fail if RAW.SHOPIFY.ORDERS stays stale
+
+UPSTREAM STATUS CHECK (last 6 hours):
+  fivetran_orders_daily: LAST SUCCESS at ${new Date(now.getTime() - 6.5 * 3600000).toISOString()}
+    ├── Status: SUCCEEDED
+    ├── Rows loaded: 0  ⚠️  (expected ~8,000 rows)
+    ├── Duration: 3 seconds (normal: 7-9 minutes)  ⚠️
+    └── Note: Shopify returns HTTP 200 with empty array during maintenance windows
+            No error is surfaced by Fivetran — this is a SILENT SUCCESS
+
+  Shopify API status: Check https://status.shopify.com
+  (Shopify had a 45-min partial outage for Webhooks+API at 01:30-02:15 UTC today)
+
+SNOWFLAKE CONTEXT:
+  Table: RAW.SHOPIFY.ORDERS
+  Current row count: 847,293 (no new rows since 6 hours ago)
+  Expected rows by now: ~855,000 (based on 30-day average)
+  No failed Snowflake queries — data simply stopped arriving
+
+WHAT MAKES THIS HARD WITHOUT CROSS-TOOL CONTEXT:
+  The alert fires on Snowflake (freshness monitor).
+  The Snowflake table is fine — it just has no new data.
+  The dbt tests will start failing in 20 minutes (null checks on today's partition).
+  The real issue is in Fivetran, which "succeeded" with 0 rows.
+  And the root cause is Shopify API behavior during their maintenance window.
+  Without the lineage map (sources.yml + Dagster graph), this looks like a Snowflake problem.
+
+Pipeline: dbt_orders_mart (alert origin: ${runId})
+Orchestrator context source: simulated (wire up Dagster MCP + GitHub for real lineage)`;
+
+  return {
+    runId,
+    orchestrator: 'dagster',
+    failedAsset: 'dbt_orders_mart',
+    startedAt,
+    failedAt,
+    enrichedPrompt,
+    source: 'simulated',
+  };
+}
 // dbt runs in Airflow, not Dagster. Warehouse contention from concurrent job.
 // Shows multi-orchestrator context.
 // -------------------------------------------------------------------
