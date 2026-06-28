@@ -3,7 +3,7 @@
 // Today: returns simulated run contexts demonstrating key failure patterns.
 // Production upgrade: replace each case with real API calls.
 
-import { getRunStatus, getRunLogs, getUpstreamContext } from './integrations/dagster';
+import { getRunStatus, getRunLogs, getUpstreamContext, getStepFailureDetails } from './integrations/dagster';
 import { getWorkflowRun } from './integrations/github-actions';
 export { SAMPLE_RUN_IDS } from './run-context-samples';
 
@@ -48,6 +48,9 @@ async function fetchRealDagsterRun(runId: string): Promise<RunContext | null> {
   const run = await getRunStatus(runId);
   const logs = await getRunLogs(runId, 30);
   const upstream = run.jobName ? await getUpstreamContext(run.jobName, runId) : null;
+
+  // GraphQL gives us the actual Python exception — MCP event log only has "STEP_FAILURE"
+  const failureDetails = await getStepFailureDetails(runId);
 
   // For known public repos (like hooli), read actual source code without auth
   let codeSnippet = '';
@@ -99,16 +102,20 @@ Please paste the error log manually, or configure Dagster credentials in /settin
     ? `⚠️ RECURRING: ${upstream.priorFailures}+ similar failures recently — systematic issue`
     : '';
 
-  // Extract failed step name - try stepKey first, then parse from message
-  const failedStepKey = errorEvents.find(e => e.stepKey)?.stepKey
+  // Extract failed step name — GraphQL stepStats is most reliable
+  const failedStepKey = failureDetails.stepKey
+    ?? errorEvents.find(e => e.stepKey)?.stepKey
     ?? logs.events.find(e => e.eventType === 'STEP_FAILURE')?.stepKey
     ?? (() => {
-      // Extract from message: "Execution of step "enriched_data.process_chunk[9]" failed."
       const stepMsg = logs.events.find(e => e.eventType === 'STEP_FAILURE')?.message ?? '';
       const match = stepMsg.match(/step "([^"]+)"/);
       return match?.[1] ?? null;
     })()
     ?? run.failureStep ?? run.assetKey ?? 'unknown';
+
+  // Real Python exception from GraphQL — much more useful than "STEP_FAILURE"
+  const realError = failureDetails.errorMessage;
+  const keyLogMessages = failureDetails.logMessages.slice(-5);
 
   // Keep failure events concise — only the key failure, not all 30 events
   const stepFailureMessage = errorEvents
@@ -126,7 +133,8 @@ ORCHESTRATOR CONTEXT (${run.source === 'live' ? 'live from data-eng-prod' : 'Dag
 ${recurringFailureNote ? `\n${recurringFailureNote}` : ''}
 
 FAILURE:
-${stepFailureMessage}
+${realError ? `  Python exception: ${realError}` : stepFailureMessage}
+${keyLogMessages.length > 0 ? `\nLAST LOG MESSAGES:\n${keyLogMessages.map(m => `  ${m}`).join('\n')}` : ''}
 
 WHAT THE CODE DOES (${failedStepKey}):
 ${codeSnippet || `Step calls an external API in a loop. Check: API health, data quality in chunk ${failedStepKey.match(/\[(\d+)\]/)?.[1] ?? 'N'}, network connectivity.`}

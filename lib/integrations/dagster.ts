@@ -276,6 +276,96 @@ export async function getRunLogs(
   }
 }
 
+// Get the actual Python exception directly from Dagster's GraphQL API.
+// The MCP event log only shows "STEP_FAILURE" — the real exception is in
+// ExecutionStepUpForRetryEvent.error.message and the preceding LogMessageEvents.
+export async function getStepFailureDetails(
+  runId: string,
+  instanceName = 'default'
+): Promise<{ errorMessage: string | null; logMessages: string[]; stepKey: string | null }> {
+  const creds = await getCredentials(instanceName);
+  if (!creds) return { errorMessage: null, logMessages: [], stepKey: null };
+
+  // Use GraphQL directly — more detail than MCP event log
+  const graphqlUrl = creds.deploymentName
+    ? `https://${creds.org}.dagster.cloud/${creds.deploymentName}/graphql`
+    : `https://dagster.cloud/graphql`;
+
+  const query = `query RunLogs($runId: String!) {
+    logsForRun(runId: $runId) {
+      ... on EventConnection {
+        events {
+          __typename
+          ... on ExecutionStepUpForRetryEvent { stepKey error { message } }
+          ... on ExecutionStepFailureEvent { stepKey error { message } }
+          ... on LogMessageEvent { message level }
+        }
+      }
+    }
+    pipelineRunOrError(runId: $runId) {
+      ... on Run { stepStats { stepKey status } }
+    }
+  }`;
+
+  try {
+    const resp = await fetch(graphqlUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Dagster-Cloud-Api-Token': creds.token,
+      },
+      body: JSON.stringify({ query, variables: { runId } }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!resp.ok) throw new Error(`GraphQL HTTP ${resp.status}`);
+
+    const data = await resp.json() as {
+      data?: {
+        logsForRun?: {
+          events?: Array<{
+            __typename: string;
+            stepKey?: string;
+            message?: string;
+            level?: string;
+            error?: { message?: string };
+          }>;
+        };
+        pipelineRunOrError?: {
+          stepStats?: Array<{ stepKey: string; status: string }>;
+        };
+      };
+    };
+
+    const events = data.data?.logsForRun?.events ?? [];
+
+    // Get the failed step from stepStats
+    const failedStep = data.data?.pipelineRunOrError?.stepStats
+      ?.find(s => s.status === 'FAILURE')?.stepKey ?? null;
+
+    // Get retry error messages (the real underlying exception)
+    const retryErrors = events
+      .filter(e => e.__typename === 'ExecutionStepUpForRetryEvent' || e.__typename === 'ExecutionStepFailureEvent')
+      .map(e => e.error?.message ?? '')
+      .filter(Boolean);
+
+    // Get relevant log messages (before the failure)
+    const logMessages = events
+      .filter(e => e.__typename === 'LogMessageEvent' && e.level !== 'DEBUG')
+      .map(e => e.message ?? '')
+      .filter(Boolean)
+      .slice(-10); // last 10 log messages
+
+    return {
+      errorMessage: retryErrors[0] ?? null,
+      logMessages,
+      stepKey: failedStep,
+    };
+  } catch (err) {
+    console.warn('[dagster] getStepFailureDetails GraphQL failed:', err);
+    return { errorMessage: null, logMessages: [], stepKey: null };
+  }
+}
+
 export async function getAssetHealth(
   assetKey: string[],
   instanceName = 'default'
