@@ -35,7 +35,7 @@ Pipeline: snowflake_raw_ingestion`,
   },
 ];
 
-const VENDOR_STATUS_NAMES = ['dagster', 'fivetran', 'snowflake', 'dbt', 'github'];
+const VENDOR_STATUS_NAMES = ['dagster', 'fivetran', 'snowflake', 'dbt', 'github', 'shopify', 'salesforce', 'stripe', 'databricks', 'airflow'];
 
 export default async function HomePage() {
   // Server-side: fetch vendor status at render time
