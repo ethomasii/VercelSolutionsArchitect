@@ -37,6 +37,11 @@ interface StatusPageSummary {
 }
 
 const VENDOR_STATUS_URLS: Record<string, { url: string | null; statusPage: string }> = {
+  // Orchestrators — if Dagster Cloud is degraded, run visibility goes dark
+  dagster: {
+    url: 'https://status.dagster.io/api/v2/summary.json',
+    statusPage: 'https://status.dagster.io',
+  },
   fivetran: {
     url: 'https://status.fivetran.com/api/v2/summary.json',
     statusPage: 'https://status.fivetran.com',
@@ -51,7 +56,6 @@ const VENDOR_STATUS_URLS: Record<string, { url: string | null; statusPage: strin
   },
   databricks: {
     // Databricks uses a custom status page (not StatusPage.io), no standard API.
-    // Dispatch will return a direct link instead of querying an API.
     url: null,
     statusPage: 'https://status.databricks.com',
   },
@@ -93,11 +97,14 @@ export function detectVendors(pipelineName: string, failureType: string): string
   const name = pipelineName.toLowerCase();
   const vendors: string[] = [];
 
+  // Orchestrator — always relevant if using Dagster
+  if (name.includes('dagster') || name.includes('etl') || name.includes('pipeline')) vendors.push('dagster');
   if (name.includes('fivetran')) vendors.push('fivetran');
   if (name.includes('snowflake')) vendors.push('snowflake');
   if (name.includes('dbt')) vendors.push('dbt');
-  if (name.includes('databricks')) vendors.push('databricks'); // explicit only, not 'ml' or 'spark'
-  if (name.includes('shopify')) vendors.push('shopify');
+  if (name.includes('databricks')) vendors.push('databricks');
+  // Shopify status IS useful (API rate limits kill Fivetran syncs) but Shopify MCP is merchant-facing
+  if (name.includes('shopify') || name.includes('orders')) vendors.push('shopify');
   if (name.includes('salesforce') || name.includes('sfdc')) vendors.push('salesforce');
   if (name.includes('stripe') || name.includes('payment')) vendors.push('stripe');
   if (name.includes('github')) vendors.push('github');
@@ -108,7 +115,7 @@ export function detectVendors(pipelineName: string, failureType: string): string
     vendors.push('fivetran');
   }
   if (failureType === 'resource_exhaustion' && vendors.length === 0) {
-    vendors.push('snowflake'); // most common warehouse for resource issues
+    vendors.push('snowflake');
   }
 
   return [...new Set(vendors)].slice(0, 3);
