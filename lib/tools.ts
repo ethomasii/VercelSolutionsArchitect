@@ -368,29 +368,34 @@ A vendor outage transforms the remediation: "wait for recovery" not "debug code.
   }),
 
   proposeActions: tool({
-    description: `After completing the triage (all 5 other tools run), propose concrete remediation
-actions the engineer can execute with one click. These turn the runbook from text into buttons.
+    description: `After completing ALL other tools, propose concrete remediation actions.
+These turn the runbook from text into buttons. Call this LAST.
 
-Call this LAST, after all other tools have run and you have the full picture.
+CRITICAL: Distinguish root cause from immediate failure:
+- If lookupIncidentHistory found upstream failures (recentUpstreamFailures), the ROOT CAUSE
+  is upstream — do NOT propose a code fix for the downstream symptom.
+  Instead: propose actions to fix the upstream issue (Fivetran sync, Dagster rerun).
+  Include a rootCauseNote explaining why a code fix would be wrong here.
+  
+- If searchGitContext found a likely-cause PR AND no upstream failures: the code change
+  IS the root cause. Propose create_pr with the specific fix.
 
-For each action:
-- Assign a risk level: "none" (read-only, info) | "low" (retrigger, idempotent) | "medium" (changes state)
-- Assign confidence: based on how certain you are this action will fix the problem
-- Mark requires_approval: true for anything that writes or costs money
-- Include specific params extracted from the log/context (connector names, run IDs, etc.)
+- If BOTH upstream AND code issues: propose fixing upstream first, note code fix is secondary.
 
-Action types and when to propose them:
-- "rerun_dagster": resource_exhaustion or code_regression where retrying makes sense
-- "trigger_fivetran_sync": upstream_data_missing + Fivetran identified
-- "create_pr": code_regression or schema_mismatch where the fix is deterministic
-  (you know the old value AND the new value from the git context)
-  Include: filePath, oldText (exact string to replace), newText, branchName, prTitle, prBody
-  Example: PR renamed customer_segment→customer_tier, dbt ref still says customer_segment
-  → create_pr to fix that one line. Include the full triage report in prBody.
-- "create_jira_ticket": any High confidence failure worth tracking  
-- "create_slack_alert": always useful to notify the team
-- "mark_resolved": when the runbook says "wait and monitor"
-- "open_dashboard": link to the relevant vendor dashboard`,
+Always include:
+- rootCauseNote: one sentence explaining what actually caused this failure
+  (e.g., "Fivetran loaded 0 rows 2h before dbt ran — fixing dbt code won't help until data arrives")
+- Whether actions address root cause or just restart the symptom
+
+Action types:
+- "rerun_dagster": ONLY after root cause is addressed — retrying before fixing root cause wastes time
+- "trigger_fivetran_sync": upstream_data_missing + Fivetran identified as root cause
+- "create_pr": code regression where the PR IS the root cause (not a symptom)
+  Include: filePath (from stackTrace), oldText, newText, branchName, prTitle, prBody, repoInstance
+- "create_jira_ticket": any High confidence failure worth tracking
+- "create_slack_alert": always useful
+- "mark_resolved": when pattern is "wait and it resolves"
+- "open_dashboard": link to relevant vendor dashboard`,
     inputSchema: z.object({
       failureType: z.string(),
       affectedPipeline: z.string(),
@@ -405,6 +410,9 @@ Action types and when to propose them:
         params: z.record(z.string(), z.string()).optional().describe('Specific params from the log: connector IDs, run IDs, pipeline names'),
       })).max(4),
       reasoning: z.string().describe('Why these specific actions, in order of priority'),
+      rootCauseNote: z.string().describe(
+        'One sentence: what actually caused this failure and whether the proposed actions address the root cause or just the symptom. E.g. "Fivetran loaded 0 rows 2h before dbt ran — fixing dbt code would not help; trigger Fivetran sync first."'
+      ),
     }),
     // Passthrough — model proposes actions, UI renders them as buttons, /api/remediate executes
     execute: async (input) => input,

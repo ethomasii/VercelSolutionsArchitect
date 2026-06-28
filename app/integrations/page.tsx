@@ -131,7 +131,45 @@ export default function IntegrationsPage() {
           );
         })}
 
-        {/* OpenLineage callout */}
+        {/* Cursor + Bugbot integration */}
+        <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900/20 p-5">
+          <div className="flex items-start gap-3">
+            <span className="text-xl mt-0.5">🖱️</span>
+            <div>
+              <h3 className="text-sm font-semibold text-zinc-200 mb-1">Cursor + Bugbot — IDE-Native Data Engineering</h3>
+              <p className="text-xs text-zinc-400 leading-relaxed mb-3">
+                With{' '}
+                <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-zinc-400">.cursor/mcp.json</code>{' '}
+                configured, Cursor agents in your IDE can directly ask "why did run X fail?" using
+                the Dagster MCP — without opening the Dispatch UI. Dispatch is the web version;
+                Cursor is the IDE version. They share the same MCP servers.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                {[
+                  { icon: '🔍', label: 'Bugbot reviews Dispatch PRs', desc: 'When Dispatch creates a fix PR, Bugbot auto-reviews it before merge' },
+                  { icon: '🖱️', label: 'Cursor Agent in IDE', desc: '"Why did run a227a58f fail?" → uses Dagster MCP → reads logs → proposes fix in your editor' },
+                  { icon: '🔄', label: 'Closed loop', desc: 'Failure → Dispatch triage → create_pr → Bugbot review → merge → Dagster confirms fix' },
+                  { icon: '📊', label: 'AI Gateway traces', desc: 'Every Cursor + Dispatch AI call tracked in the same Vercel AI Gateway dashboard' },
+                ].map((item, i) => (
+                  <div key={i} className="flex items-start gap-2 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+                    <span className="text-sm shrink-0">{item.icon}</span>
+                    <div>
+                      <p className="text-xs font-medium text-zinc-300">{item.label}</p>
+                      <p className="text-xs text-zinc-600 mt-0.5">{item.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-lg bg-zinc-900 border border-zinc-800 p-3">
+                <p className="text-xs font-mono text-zinc-500 leading-relaxed">{`# In Cursor Agent (uses .cursor/mcp.json):
+"Why did run a227a58f fail in data-eng-prod?"
+→ Dagster MCP: get_run_logs(run_id) → full stack trace
+→ GitHub MCP: read fct_customer_orders.sql → broken line
+→ Proposes fix → creates PR → Bugbot reviews it`}</p>
+              </div>
+            </div>
+          </div>
+        </div>
         <div className="mt-4 rounded-xl border border-zinc-800 bg-zinc-900/20 p-5">
           <div className="flex items-start gap-3">
             <span className="text-xl mt-0.5">🔗</span>

@@ -481,13 +481,14 @@ type ProposedAction = {
   requiresApproval: boolean; params?: Record<string, string>;
 };
 
-function ActionsPanel({ actions, pipelineName, reportText }: {
+function ActionsPanel({ actions, rootCauseNote, pipelineName, reportText }: {
   actions: ProposedAction[];
+  rootCauseNote?: string;
   pipelineName?: string;
   reportText: string;
 }) {
   const [executing, setExecuting] = useState<string | null>(null);
-  const [results, setResults] = useState<Record<string, { ok: boolean; message?: string; error?: string }>>({});
+  const [results, setResults] = useState<Record<string, { ok: boolean; message?: string; error?: string; url?: string }>>({});
   const [confirming, setConfirming] = useState<string | null>(null);
 
   const RISK_ICONS: Record<string, string> = { none: '📋', low: '⚡', medium: '⚠️' };
@@ -537,6 +538,13 @@ function ActionsPanel({ actions, pipelineName, reportText }: {
         <span className="text-xs font-semibold text-zinc-300">Proposed Actions</span>
         <span className="text-xs text-zinc-600 ml-1">— click to execute with approval</span>
       </div>
+      {rootCauseNote && (
+        <div className="px-4 py-2.5 border-b border-zinc-800/40 bg-zinc-900/20">
+          <p className="text-xs text-zinc-400 leading-relaxed">
+            <span className="font-medium text-zinc-300">Root cause: </span>{rootCauseNote}
+          </p>
+        </div>
+      )}
       <div className="divide-y divide-zinc-800/40">
         {actions.map((action) => {
           const result = results[action.id];
@@ -635,7 +643,9 @@ function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportTex
 
   // Extract proposeActions output for the actions panel
   const actionsPart = toolParts.find(p => p.type === 'tool-proposeActions');
-  const proposedActions = (actionsPart?.output as { actions?: ProposedAction[] } | undefined)?.actions ?? [];
+  const actionsOutput = actionsPart?.output as { actions?: ProposedAction[]; rootCauseNote?: string } | undefined;
+  const proposedActions = actionsOutput?.actions ?? [];
+  const rootCauseNote = actionsOutput?.rootCauseNote;
 
   // Extract pipeline name from classifyFailure for the remediation API
   const classifyPart = toolParts.find(p => p.type === 'tool-classifyFailure');
@@ -659,7 +669,12 @@ function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportTex
       )}
       {fullText && <MarkdownReport text={fullText} />}
       {proposedActions.length > 0 && (
-        <ActionsPanel actions={proposedActions} pipelineName={pipelineName} reportText={reportText} />
+        <ActionsPanel
+          actions={proposedActions}
+          rootCauseNote={rootCauseNote}
+          pipelineName={pipelineName}
+          reportText={reportText}
+        />
       )}
     </div>
   );
