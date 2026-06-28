@@ -749,15 +749,22 @@ function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportTex
     // Network timeout with recent batch size increase → revert config
     if ((ft === 'network_timeout' || ft === 'code_regression') && causePR?.message?.toLowerCase().match(/batch|chunk|size|parallel/)) {
       rootCauseNote = rootCauseNote ?? 'Recent batch size or parallelism change may have caused API rate limiting — the config change is likely the root cause.';
-      derived.push({
-        id: 'create_pr',
-        label: 'Revert batch size / config change',
-        description: `Revert the "${causePR?.message?.slice(0, 60)}" change while investigating API rate limits.`,
-        risk: 'low',
-        actionConfidence: 'High',
-        requiresApproval: true,
-        params: { message: causePR?.message ?? '' },
-      });
+      // Only propose create_pr if we have a commit SHA to look up the actual change
+      if (causePR?.sha) {
+        derived.push({
+          id: 'create_pr',
+          label: 'Revert batch size / config change',
+          description: `Revert the "${causePR?.message?.slice(0, 60)}" change while investigating API rate limits. Reads commit ${causePR.sha.slice(0,7)} to find exact change.`,
+          risk: 'low',
+          actionConfidence: 'Medium',
+          requiresApproval: true,
+          params: {
+            commitSha: causePR.sha,
+            message: causePR.message ?? '',
+            repoInstance: 'default',
+          },
+        });
+      }
     }
 
     // Dagster rerun — always relevant for Dagster failures

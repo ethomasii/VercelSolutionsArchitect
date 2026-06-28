@@ -145,7 +145,37 @@ export async function POST(req: Request) {
     }
 
     case 'create_pr': {
-      const { filePath, oldText, newText, branchName, prTitle, prBody, commitMessage, repoInstance } = params;
+      const { filePath, oldText, newText, branchName, prTitle, prBody, commitMessage, repoInstance, commitSha } = params;
+
+      // If we have a commitSha but no filePath, fetch the diff to find what changed
+      if (commitSha && !filePath && repoInstance) {
+        const ghT = (await getSetting('github', 'GITHUB_TOKEN', repoInstance))
+          || (await getSetting('github', 'GITHUB_TOKEN', 'default'));
+        const ghO = (await getSetting('github', 'GITHUB_REPO_OWNER', repoInstance))
+          || (await getSetting('github', 'GITHUB_REPO_OWNER', 'default'));
+        const ghR = (await getSetting('github', 'GITHUB_REPO_NAME', repoInstance))
+          || (await getSetting('github', 'GITHUB_REPO_NAME', 'default'));
+
+        if (!ghT || !ghO || !ghR) {
+          return Response.json({ ok: false, error: 'GitHub credentials not configured', setup: 'Go to /settings → GitHub' }, { status: 400 });
+        }
+
+        const hdr = { 'Authorization': `Bearer ${ghT}`, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+        const commitResp = await fetch(`https://api.github.com/repos/${ghO}/${ghR}/commits/${commitSha}`, { headers: hdr, signal: AbortSignal.timeout(8000) });
+        if (!commitResp.ok) return Response.json({ ok: false, error: `Could not fetch commit ${commitSha}: ${commitResp.status}` });
+
+        const commitData = await commitResp.json() as {
+          files?: Array<{ filename: string; additions: number; deletions: number; patch?: string }>;
+        };
+        const changedFiles = (commitData.files ?? []).filter(f => f.additions > 0 || f.deletions > 0);
+
+        return Response.json({
+          ok: false,
+          error: `Cannot auto-create revert PR — need exact file change details`,
+          detail: `Commit ${commitSha.slice(0,7)} changed: ${changedFiles.map(f => f.filename).join(', ')}. Review the diff and specify filePath + oldText + newText to create a targeted revert PR.`,
+          changedFiles: changedFiles.map(f => ({ path: f.filename, patch: f.patch?.slice(0, 200) })),
+        });
+      }
       if (!filePath || !oldText || !newText || !branchName || !prTitle) {
         return Response.json({ ok: false, error: 'filePath, oldText, newText, branchName, prTitle required' }, { status: 400 });
       }
