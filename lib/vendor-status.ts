@@ -38,8 +38,8 @@ interface StatusPageSummary {
 
 const VENDOR_STATUS_URLS: Record<string, { url: string; statusPage: string }> = {
   fivetran: {
-    url: 'https://www.fivetranstatus.com/api/v2/summary.json',
-    statusPage: 'https://www.fivetranstatus.com',
+    url: 'https://status.fivetran.com/api/v2/summary.json',
+    statusPage: 'https://status.fivetran.com',
   },
   snowflake: {
     url: 'https://status.snowflake.com/api/v2/summary.json',

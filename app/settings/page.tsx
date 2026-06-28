@@ -3,159 +3,140 @@
 import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 
-// Config schema for each integration — what fields to show
-const INTEGRATION_CONFIGS: Array<{
+// --- Types ---
+type SettingValue = { value: string | null; source: 'db' | 'env'; isSecret: boolean; isSet: boolean; updatedAt?: string };
+// { [integrationId]: { [instanceName]: { [key]: SettingValue } } }
+type SavedSettings = Record<string, Record<string, Record<string, SettingValue>>>;
+type DraftSettings = Record<string, Record<string, Record<string, string>>>;
+
+const MASK = '••••••••';
+
+// --- Integration field definitions ---
+interface FieldDef {
+  key: string;
+  label: string;
+  placeholder: string;
+  isSecret: boolean;
+  hint?: string;
+}
+
+interface IntegrationDef {
   id: string;
   name: string;
   icon: string;
   group: string;
   description: string;
+  supportsMultipleInstances?: boolean;
   docsUrl?: string;
-  fields: Array<{
-    key: string;
-    label: string;
-    placeholder: string;
-    isSecret: boolean;
-    hint?: string;
-  }>;
-}> = [
+  fields: FieldDef[];
+}
+
+const INTEGRATIONS: IntegrationDef[] = [
   {
-    id: 'dagster',
-    name: 'Dagster',
-    icon: '⚡',
-    group: 'Orchestration',
-    description: 'Run logs, asset dependency graph, upstream failure detection. Has official MCP server.',
+    id: 'dagster', name: 'Dagster', icon: '⚡', group: 'Orchestration',
+    description: 'Run logs, asset graph traversal, upstream failure detection.',
+    supportsMultipleInstances: true,
     docsUrl: 'https://docs.dagster.io/guides/operate/model-context-protocol',
     fields: [
       { key: 'DAGSTER_HOST', label: 'Host URL', placeholder: 'https://your-org.dagster.cloud', isSecret: false, hint: 'Your Dagster+ organization URL' },
       { key: 'DAGSTER_TOKEN', label: 'API Token', placeholder: 'dagster-user-token-...', isSecret: true, hint: 'Admin → User Tokens → Create token' },
-      { key: 'DAGSTER_ORG', label: 'Organization slug', placeholder: 'your-org', isSecret: false, hint: 'Used for Dagster MCP: Dagster-Cloud-Organization header' },
+      { key: 'DAGSTER_ORG', label: 'Organization slug', placeholder: 'your-org', isSecret: false, hint: 'Used as the Dagster-Cloud-Organization header' },
     ],
   },
   {
-    id: 'airflow',
-    name: 'Airflow / Astronomer',
-    icon: '🌬️',
-    group: 'Orchestration',
-    description: 'DAG run context, task logs, resource contention across shared warehouses.',
+    id: 'airflow', name: 'Airflow / Astronomer', icon: '🌬️', group: 'Orchestration',
+    description: 'DAG run context, task logs, resource contention detection.',
+    supportsMultipleInstances: true,
     fields: [
-      { key: 'AIRFLOW_HOST', label: 'Airflow host', placeholder: 'https://your-airflow.astronomer.io', isSecret: false },
-      { key: 'AIRFLOW_API_KEY', label: 'API key', placeholder: 'astronomer-api-key', isSecret: true, hint: 'Astronomer workspace → API keys' },
+      { key: 'AIRFLOW_HOST', label: 'Airflow host', placeholder: 'https://your-airflow.astronomer.io', isSecret: false, hint: 'e.g. production, staging, us-east' },
+      { key: 'AIRFLOW_API_KEY', label: 'API key', placeholder: 'astronomer-api-key', isSecret: true, hint: 'Astronomer → workspace → API keys' },
     ],
   },
   {
-    id: 'prefect',
-    name: 'Prefect',
-    icon: '🌀',
-    group: 'Orchestration',
+    id: 'prefect', name: 'Prefect', icon: '🌀', group: 'Orchestration',
+    supportsMultipleInstances: true,
     description: 'Flow run context, task state, deployment history.',
     fields: [
-      { key: 'PREFECT_API_URL', label: 'API URL', placeholder: 'https://api.prefect.cloud/api/accounts/YOUR_ID/workspaces/YOUR_WS', isSecret: false },
+      { key: 'PREFECT_API_URL', label: 'API URL', placeholder: 'https://api.prefect.cloud/api/accounts/ID/workspaces/WS', isSecret: false },
       { key: 'PREFECT_API_KEY', label: 'API key', placeholder: 'pnu_...', isSecret: true },
     ],
   },
   {
-    id: 'fivetran',
-    name: 'Fivetran',
-    icon: '🔌',
-    group: 'Ingestion',
+    id: 'fivetran', name: 'Fivetran', icon: '🔌', group: 'Ingestion',
     description: 'Connector sync status, row counts, schema changes. Detects silent 0-row failures.',
     docsUrl: 'https://fivetran.com/docs/rest-api',
     fields: [
-      { key: 'FIVETRAN_API_KEY', label: 'API key', placeholder: 'fivetran-api-key', isSecret: true, hint: 'Fivetran → Settings → API Config' },
+      { key: 'FIVETRAN_API_KEY', label: 'API key', placeholder: 'fivetran-api-key', isSecret: true, hint: 'Settings → API Config' },
       { key: 'FIVETRAN_API_SECRET', label: 'API secret', placeholder: 'fivetran-api-secret', isSecret: true },
     ],
   },
   {
-    id: 'airbyte',
-    name: 'Airbyte',
-    icon: '🌊',
-    group: 'Ingestion',
-    description: 'Connection sync status, schema drift, catalog changes.',
+    id: 'airbyte', name: 'Airbyte', icon: '🌊', group: 'Ingestion',
+    description: 'Connection sync status, schema drift.',
     fields: [
       { key: 'AIRBYTE_API_URL', label: 'API URL', placeholder: 'https://api.airbyte.com', isSecret: false },
       { key: 'AIRBYTE_API_KEY', label: 'API key', placeholder: 'airbyte-api-key', isSecret: true },
     ],
   },
   {
-    id: 'snowflake',
-    name: 'Snowflake',
-    icon: '❄️',
-    group: 'Transformation',
-    description: 'Query history, warehouse utilization, concurrent job detection, data freshness.',
+    id: 'snowflake', name: 'Snowflake', icon: '❄️', group: 'Transformation',
+    description: 'Query history, warehouse utilization, concurrent job detection.',
+    supportsMultipleInstances: true,
     fields: [
-      { key: 'SNOWFLAKE_ACCOUNT', label: 'Account identifier', placeholder: 'orgname-accountname', isSecret: false, hint: 'e.g. xy12345.us-east-1' },
+      { key: 'SNOWFLAKE_ACCOUNT', label: 'Account', placeholder: 'orgname-accountname', isSecret: false, hint: 'e.g. xy12345.us-east-1' },
       { key: 'SNOWFLAKE_USER', label: 'Username', placeholder: 'DISPATCH_SVC_ACCT', isSecret: false },
-      { key: 'SNOWFLAKE_PASSWORD', label: 'Password', placeholder: '••••••••', isSecret: true },
+      { key: 'SNOWFLAKE_PASSWORD', label: 'Password', placeholder: '', isSecret: true },
       { key: 'SNOWFLAKE_WAREHOUSE', label: 'Warehouse', placeholder: 'COMPUTE_WH', isSecret: false },
     ],
   },
   {
-    id: 'dbt_cloud',
-    name: 'dbt Cloud',
-    icon: '🔄',
-    group: 'Transformation',
-    description: 'Job run details, model test results, lineage, source freshness.',
+    id: 'dbt_cloud', name: 'dbt Cloud', icon: '🔄', group: 'Transformation',
+    description: 'Job run details, model test results, source freshness.',
     docsUrl: 'https://docs.getdbt.com/dbt-cloud/api-v2',
     fields: [
-      { key: 'DBT_CLOUD_API_KEY', label: 'API key', placeholder: 'dbt-cloud-api-key', isSecret: true, hint: 'Profile → API Access → Generate new key' },
-      { key: 'DBT_CLOUD_ACCOUNT_ID', label: 'Account ID', placeholder: '12345', isSecret: false, hint: 'From your dbt Cloud URL: cloud.getdbt.com/accounts/{id}' },
+      { key: 'DBT_CLOUD_API_KEY', label: 'API key', placeholder: 'dbt-cloud-api-key', isSecret: true, hint: 'Profile → API Access' },
+      { key: 'DBT_CLOUD_ACCOUNT_ID', label: 'Account ID', placeholder: '12345', isSecret: false },
     ],
   },
   {
-    id: 'github',
-    name: 'GitHub',
-    icon: '🐙',
-    group: 'Knowledge',
-    description: 'Real commit history and PRs. Finds the code change that caused the failure.',
+    id: 'github', name: 'GitHub', icon: '🐙', group: 'Knowledge',
+    description: 'Real commit history and PRs. Finds the code change that broke things.',
     fields: [
-      { key: 'GITHUB_TOKEN', label: 'Personal access token', placeholder: 'ghp_...', isSecret: true, hint: 'Settings → Developer settings → Personal access tokens → repo scope' },
+      { key: 'GITHUB_TOKEN', label: 'Personal access token', placeholder: 'ghp_...', isSecret: true, hint: 'Settings → Developer settings → PAT → repo scope' },
       { key: 'GITHUB_REPO_OWNER', label: 'Repo owner', placeholder: 'your-org', isSecret: false },
       { key: 'GITHUB_REPO_NAME', label: 'dbt repo name', placeholder: 'data-platform', isSecret: false },
     ],
   },
   {
-    id: 'confluence',
-    name: 'Confluence',
-    icon: '📖',
-    group: 'Knowledge',
-    description: 'Search external runbooks alongside internal ones.',
+    id: 'confluence', name: 'Confluence', icon: '📖', group: 'Knowledge',
+    description: 'Fan out runbook search to Confluence spaces.',
     fields: [
       { key: 'CONFLUENCE_BASE_URL', label: 'Base URL', placeholder: 'https://your-org.atlassian.net', isSecret: false },
-      { key: 'CONFLUENCE_TOKEN', label: 'API token', placeholder: 'confluence-api-token', isSecret: true, hint: 'id.atlassian.com → Security → Create and manage API tokens' },
-      { key: 'CONFLUENCE_SPACE_KEY', label: 'Space key', placeholder: 'DATA', isSecret: false, hint: 'The space containing your runbooks' },
+      { key: 'CONFLUENCE_TOKEN', label: 'API token', placeholder: 'confluence-api-token', isSecret: true, hint: 'id.atlassian.com → Security → API tokens' },
+      { key: 'CONFLUENCE_SPACE_KEY', label: 'Space key', placeholder: 'DATA', isSecret: false },
     ],
   },
   {
-    id: 'notion',
-    name: 'Notion',
-    icon: '📝',
-    group: 'Knowledge',
+    id: 'notion', name: 'Notion', icon: '📝', group: 'Knowledge',
     description: 'Pull runbooks and incident post-mortems from Notion databases.',
     fields: [
-      { key: 'NOTION_API_KEY', label: 'Integration token', placeholder: 'secret_...', isSecret: true, hint: 'notion.so/my-integrations → Create integration' },
-      { key: 'NOTION_DATABASE_ID', label: 'Runbook database ID', placeholder: '32-char UUID from page URL', isSecret: false },
+      { key: 'NOTION_API_KEY', label: 'Integration token', placeholder: 'secret_...', isSecret: true, hint: 'notion.so/my-integrations' },
+      { key: 'NOTION_DATABASE_ID', label: 'Runbook database ID', placeholder: '32-char UUID', isSecret: false },
     ],
   },
   {
-    id: 'slack',
-    name: 'Slack',
-    icon: '💬',
-    group: 'Alerting',
-    description: 'Post triage reports to #data-alerts automatically on failure.',
+    id: 'slack', name: 'Slack', icon: '💬', group: 'Alerting',
+    description: 'Auto-post triage reports to #data-alerts.',
     fields: [
-      { key: 'SLACK_WEBHOOK_URL', label: 'Incoming webhook URL', placeholder: 'https://hooks.slack.com/services/...', isSecret: true, hint: 'api.slack.com/apps → Incoming Webhooks → Add New Webhook' },
+      { key: 'SLACK_WEBHOOK_URL', label: 'Incoming webhook URL', placeholder: 'https://hooks.slack.com/services/...', isSecret: true, hint: 'api.slack.com/apps → Incoming Webhooks' },
       { key: 'SLACK_CHANNEL', label: 'Default channel', placeholder: '#data-alerts', isSecret: false },
     ],
   },
   {
-    id: 'pagerduty',
-    name: 'PagerDuty',
-    icon: '🔔',
-    group: 'Alerting',
-    description: 'Auto-page on High confidence failures, check on-call schedule.',
+    id: 'pagerduty', name: 'PagerDuty', icon: '🔔', group: 'Alerting',
+    description: 'Auto-page on High confidence failures.',
     fields: [
-      { key: 'PAGERDUTY_API_KEY', label: 'API key', placeholder: 'pagerduty-api-key', isSecret: true, hint: 'PagerDuty → Integrations → API Access Keys' },
+      { key: 'PAGERDUTY_API_KEY', label: 'API key', placeholder: 'pagerduty-api-key', isSecret: true, hint: 'Integrations → API Access Keys' },
       { key: 'PAGERDUTY_SERVICE_ID', label: 'Service ID', placeholder: 'P1234AB', isSecret: false },
     ],
   },
@@ -163,16 +144,12 @@ const INTEGRATION_CONFIGS: Array<{
 
 const GROUPS = ['Orchestration', 'Ingestion', 'Transformation', 'Knowledge', 'Alerting'];
 
-// --- Types ---
-type SettingValue = { value: string | null; source: 'db' | 'env' | 'unset'; isSecret: boolean; updatedAt?: string };
-type SavedSettings = Record<string, Record<string, SettingValue>>;
-type DraftSettings = Record<string, Record<string, string>>;
-
 export default function SettingsPage() {
   const [savedSettings, setSavedSettings] = useState<SavedSettings>({});
   const [drafts, setDrafts] = useState<DraftSettings>({});
+  const [newInstanceNames, setNewInstanceNames] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState<string | null>(null);
-  const [saved, setSaved] = useState<string | null>(null);
+  const [savedKey, setSavedKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const loadSettings = useCallback(async () => {
@@ -188,52 +165,89 @@ export default function SettingsPage() {
 
   useEffect(() => { loadSettings(); }, [loadSettings]);
 
-  const getFieldValue = (integrationId: string, key: string): string => {
-    // Show draft first, then saved value
-    return drafts[integrationId]?.[key] ?? savedSettings[integrationId]?.[key]?.value ?? '';
+  const getInstances = (integrationId: string): string[] => {
+    const saved = Object.keys(savedSettings[integrationId] ?? {});
+    if (!saved.includes('default')) saved.unshift('default');
+    return [...new Set(saved)];
   };
 
-  const isConnected = (integrationId: string): boolean => {
-    const intSaved = savedSettings[integrationId];
-    if (!intSaved) return false;
-    return Object.values(intSaved).some(v => v.value && v.source !== 'unset');
+  const getFieldValue = (integrationId: string, instanceName: string, key: string): string => {
+    return drafts[integrationId]?.[instanceName]?.[key]
+      ?? savedSettings[integrationId]?.[instanceName]?.[key]?.value
+      ?? '';
   };
 
-  const handleFieldChange = (integrationId: string, key: string, value: string) => {
+  const isInstanceConnected = (integrationId: string, instanceName: string): boolean => {
+    const inst = savedSettings[integrationId]?.[instanceName];
+    return inst ? Object.values(inst).some(v => v.isSet) : false;
+  };
+
+  const isLive = (integrationId: string): boolean => {
+    return Object.keys(savedSettings[integrationId] ?? {}).some(inst =>
+      isInstanceConnected(integrationId, inst)
+    );
+  };
+
+  const handleFieldChange = (integrationId: string, instanceName: string, key: string, value: string) => {
     setDrafts(prev => ({
       ...prev,
-      [integrationId]: { ...(prev[integrationId] ?? {}), [key]: value },
+      [integrationId]: {
+        ...(prev[integrationId] ?? {}),
+        [instanceName]: { ...(prev[integrationId]?.[instanceName] ?? {}), [key]: value },
+      },
     }));
   };
 
-  const handleSave = async (integration: typeof INTEGRATION_CONFIGS[0]) => {
-    setSaving(integration.id);
+  const handleSave = async (integration: IntegrationDef, instanceName: string) => {
+    const saveKey = `${integration.id}:${instanceName}`;
+    setSaving(saveKey);
     try {
       const fieldValues = integration.fields.map(f => ({
         key: f.key,
-        value: drafts[integration.id]?.[f.key] ?? '',
+        value: drafts[integration.id]?.[instanceName]?.[f.key] ?? '',
         isSecret: f.isSecret,
-      })).filter(f => f.value && f.value !== '••••••••');
+      })).filter(f => f.value && f.value !== MASK);
 
       await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ integrationId: integration.id, settings: fieldValues }),
+        body: JSON.stringify({ integrationId: integration.id, instanceName, settings: fieldValues }),
       });
 
-      // Clear drafts for this integration and reload
-      setDrafts(prev => { const next = { ...prev }; delete next[integration.id]; return next; });
+      setDrafts(prev => {
+        const next = { ...prev };
+        if (next[integration.id]) {
+          const intNext = { ...next[integration.id] };
+          delete intNext[instanceName];
+          next[integration.id] = intNext;
+        }
+        return next;
+      });
       await loadSettings();
-      setSaved(integration.id);
-      setTimeout(() => setSaved(null), 3000);
+      setSavedKey(saveKey);
+      setTimeout(() => setSavedKey(null), 2500);
     } finally {
       setSaving(null);
     }
   };
 
-  const handleClear = async (integrationId: string) => {
-    await fetch(`/api/settings?integrationId=${integrationId}`, { method: 'DELETE' });
-    setDrafts(prev => { const next = { ...prev }; delete next[integrationId]; return next; });
+  const handleAddInstance = async (integration: IntegrationDef) => {
+    const name = newInstanceNames[integration.id]?.trim();
+    if (!name) return;
+    setNewInstanceNames(prev => { const n = { ...prev }; delete n[integration.id]; return n; });
+    // Pre-populate the instance in drafts so the form appears
+    setDrafts(prev => ({
+      ...prev,
+      [integration.id]: { ...(prev[integration.id] ?? {}), [name]: {} },
+    }));
+    setSavedSettings(prev => ({
+      ...prev,
+      [integration.id]: { ...(prev[integration.id] ?? {}), [name]: {} },
+    }));
+  };
+
+  const handleClearInstance = async (integrationId: string, instanceName: string) => {
+    await fetch(`/api/settings?integrationId=${integrationId}&instanceName=${instanceName}`, { method: 'DELETE' });
     await loadSettings();
   };
 
@@ -245,143 +259,179 @@ export default function SettingsPage() {
           <span className="text-zinc-700">/</span>
           <span className="text-sm font-medium text-zinc-300">Settings</span>
         </div>
-        <div className="flex items-center gap-2">
-          <Link href="/integrations" className="text-xs text-zinc-600 hover:text-zinc-400 transition">Integration docs →</Link>
-        </div>
+        <Link href="/integrations" className="text-xs text-zinc-600 hover:text-zinc-400 transition">Integration docs →</Link>
       </header>
 
       <div className="mx-auto max-w-3xl px-6 py-8">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-white mb-2">Integration Settings</h1>
           <p className="text-sm text-zinc-500 max-w-2xl">
-            Configure your data stack connections. Values are stored in Neon and used at runtime
-            alongside environment variables. Secrets are masked after saving.
+            Configure your data stack. Each integration shows <strong className="text-amber-400 font-medium">DEMO</strong> (synthetic data) or{' '}
+            <strong className="text-green-400 font-medium">LIVE</strong> (real API). Secrets are encrypted with AES-256-GCM before storage.
           </p>
-          <div className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-amber-800/30 bg-amber-950/10 px-3 py-1.5">
-            <span className="text-xs text-amber-400">⚠️</span>
-            <span className="text-xs text-amber-400/80">
-              Demo mode: values stored in plaintext. Production: use Vercel env vars or a secrets manager.
-            </span>
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-blue-800/30 bg-blue-950/10 px-3 py-2">
+            <span className="text-blue-400 text-sm shrink-0">🔐</span>
+            <div>
+              <p className="text-xs text-blue-300 font-medium">Secrets are encrypted at rest</p>
+              <p className="text-xs text-blue-400/70 mt-0.5">
+                AES-256-GCM using{' '}
+                <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-xs">DISPATCH_ENCRYPTION_KEY</code>
+                {' '}env var. For production:{' '}
+                <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-xs">
+                  node -e &ldquo;console.log(require(&apos;crypto&apos;).randomBytes(32).toString(&apos;base64&apos;))&rdquo;
+                </code>
+              </p>
+            </div>
           </div>
         </div>
 
         {loading ? (
           <div className="flex items-center justify-center py-16">
-            <div className="flex items-center gap-2 text-zinc-500 text-sm">
-              <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-              </svg>
-              Loading settings...
-            </div>
+            <svg className="h-4 w-4 animate-spin text-zinc-600 mr-2" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+            <span className="text-zinc-500 text-sm">Loading settings...</span>
           </div>
         ) : (
           GROUPS.map(group => {
-            const groupIntegrations = INTEGRATION_CONFIGS.filter(i => i.group === group);
+            const groupIntegrations = INTEGRATIONS.filter(i => i.group === group);
             return (
               <div key={group} className="mb-8">
                 <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wide mb-3">{group}</h2>
                 <div className="space-y-4">
                   {groupIntegrations.map(integration => {
-                    const connected = isConnected(integration.id);
-                    const hasDraft = Object.keys(drafts[integration.id] ?? {}).some(
-                      k => drafts[integration.id][k]
-                    );
+                    const live = isLive(integration.id);
+                    const instances = getInstances(integration.id);
 
                     return (
-                      <div key={integration.id} className={`rounded-xl border px-5 py-4 ${
-                        connected ? 'border-green-800/30 bg-green-950/5' : 'border-zinc-800 bg-zinc-900/20'
-                      }`}>
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="flex items-center gap-2">
-                            <span className="text-lg">{integration.icon}</span>
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <h3 className="text-sm font-semibold text-zinc-200">{integration.name}</h3>
-                                {connected ? (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2 py-0.5 text-xs font-medium text-green-400">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-green-500" />Connected
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-500">
-                                    <span className="h-1.5 w-1.5 rounded-full bg-zinc-600" />Not configured
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-xs text-zinc-600 mt-0.5">{integration.description}</p>
+                      <div key={integration.id} className={`rounded-xl border overflow-hidden ${live ? 'border-green-800/30' : 'border-zinc-800'}`}>
+                        {/* Integration header */}
+                        <div className={`flex items-center gap-3 px-4 py-3 ${live ? 'bg-green-950/10' : 'bg-zinc-900/40'}`}>
+                          <span className="text-lg">{integration.icon}</span>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-semibold text-zinc-200">{integration.name}</span>
+                              {live ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2 py-0.5 text-xs font-semibold text-green-400">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-green-500" />LIVE
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-400">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />DEMO
+                                </span>
+                              )}
                             </div>
+                            <p className="text-xs text-zinc-600 mt-0.5">{integration.description}</p>
                           </div>
-                          <div className="flex items-center gap-2">
-                            {integration.docsUrl && (
-                              <a href={integration.docsUrl} target="_blank" rel="noopener noreferrer"
-                                className="text-xs text-zinc-700 hover:text-zinc-400 transition">docs →</a>
-                            )}
-                            {connected && (
-                              <button onClick={() => handleClear(integration.id)}
-                                className="text-xs text-zinc-700 hover:text-red-400 transition">clear</button>
-                            )}
-                          </div>
+                          {integration.docsUrl && (
+                            <a href={integration.docsUrl} target="_blank" rel="noopener noreferrer"
+                              className="text-xs text-zinc-700 hover:text-zinc-400 transition shrink-0">docs →</a>
+                          )}
                         </div>
 
-                        <div className="space-y-2.5">
-                          {integration.fields.map(field => {
-                            const currentValue = getFieldValue(integration.id, field.key);
-                            const savedVal = savedSettings[integration.id]?.[field.key];
-                            const isFromEnv = savedVal?.source === 'env';
+                        {/* Instances */}
+                        {instances.map(instanceName => {
+                          const instanceConnected = isInstanceConnected(integration.id, instanceName);
+                          const saveKey = `${integration.id}:${instanceName}`;
+                          const hasDraft = Object.keys(drafts[integration.id]?.[instanceName] ?? {}).some(
+                            k => drafts[integration.id]?.[instanceName]?.[k]
+                          );
 
-                            return (
-                              <div key={field.key}>
-                                <div className="flex items-center gap-2 mb-1">
-                                  <label className="text-xs font-medium text-zinc-400">{field.label}</label>
-                                  <code className="text-xs font-mono text-zinc-600">{field.key}</code>
-                                  {isFromEnv && (
-                                    <span className="text-xs text-zinc-600 italic">set via env var</span>
+                          return (
+                            <div key={instanceName} className="border-t border-zinc-800/60 px-4 py-3">
+                              {instances.length > 1 || integration.supportsMultipleInstances ? (
+                                <div className="flex items-center justify-between mb-2.5">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-xs font-medium text-zinc-400">
+                                      {instanceName === 'default' ? 'Default' : instanceName}
+                                    </span>
+                                    {instanceConnected && (
+                                      <span className="text-xs text-green-600">● connected</span>
+                                    )}
+                                  </div>
+                                  {instanceName !== 'default' && (
+                                    <button onClick={() => handleClearInstance(integration.id, instanceName)}
+                                      className="text-xs text-zinc-700 hover:text-red-400 transition">remove</button>
+                                  )}
+                                  {instanceConnected && instanceName === 'default' && (
+                                    <button onClick={() => handleClearInstance(integration.id, instanceName)}
+                                      className="text-xs text-zinc-700 hover:text-red-400 transition">clear</button>
                                   )}
                                 </div>
-                                <input
-                                  type={field.isSecret ? 'password' : 'text'}
-                                  value={currentValue}
-                                  onChange={e => handleFieldChange(integration.id, field.key, e.target.value)}
-                                  placeholder={isFromEnv ? '(overrides env var)' : field.placeholder}
-                                  disabled={isFromEnv}
-                                  className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 placeholder-zinc-700 outline-none transition focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed font-mono"
-                                />
-                                {field.hint && (
-                                  <p className="mt-0.5 text-xs text-zinc-600">{field.hint}</p>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
+                              ) : (
+                                instanceConnected && (
+                                  <div className="flex justify-end mb-2">
+                                    <button onClick={() => handleClearInstance(integration.id, instanceName)}
+                                      className="text-xs text-zinc-700 hover:text-red-400 transition">clear credentials</button>
+                                  </div>
+                                )
+                              )}
 
-                        <div className="mt-3 flex items-center justify-between">
-                          <div />
-                          <button
-                            onClick={() => handleSave(integration)}
-                            disabled={!hasDraft || saving === integration.id}
-                            className={`inline-flex items-center gap-2 rounded-lg px-4 py-1.5 text-xs font-semibold transition ${
-                              saved === integration.id
-                                ? 'bg-green-600 text-white'
-                                : hasDraft
-                                ? 'bg-orange-600 text-white hover:bg-orange-500'
-                                : 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
-                            }`}
-                          >
-                            {saving === integration.id ? (
-                              <>
-                                <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                                </svg>
-                                Saving...
-                              </>
-                            ) : saved === integration.id ? (
-                              <>✓ Saved</>
-                            ) : (
-                              'Save'
-                            )}
-                          </button>
-                        </div>
+                              <div className="space-y-2">
+                                {integration.fields.map(field => {
+                                  const currentValue = getFieldValue(integration.id, instanceName, field.key);
+                                  const savedVal = savedSettings[integration.id]?.[instanceName]?.[field.key];
+                                  const fromEnv = savedVal?.source === 'env';
+
+                                  return (
+                                    <div key={field.key}>
+                                      <div className="flex items-center gap-2 mb-0.5">
+                                        <label className="text-xs font-medium text-zinc-400">{field.label}</label>
+                                        <code className="text-xs font-mono text-zinc-700">{field.key}</code>
+                                        {fromEnv && <span className="text-xs text-zinc-600 italic">env var</span>}
+                                        {savedVal?.isSet && !fromEnv && <span className="text-xs text-green-700">✓ set</span>}
+                                      </div>
+                                      <input
+                                        type={field.isSecret ? 'password' : 'text'}
+                                        value={currentValue}
+                                        onChange={e => handleFieldChange(integration.id, instanceName, field.key, e.target.value)}
+                                        placeholder={fromEnv ? '(set via env var)' : field.placeholder}
+                                        disabled={fromEnv}
+                                        className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-sm text-zinc-200 placeholder-zinc-700 outline-none transition focus:border-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed font-mono"
+                                      />
+                                      {field.hint && <p className="mt-0.5 text-xs text-zinc-700">{field.hint}</p>}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+
+                              <div className="mt-2.5 flex justify-end">
+                                <button onClick={() => handleSave(integration, instanceName)}
+                                  disabled={!hasDraft || saving === saveKey}
+                                  className={`rounded-lg px-4 py-1.5 text-xs font-semibold transition inline-flex items-center gap-1.5 ${
+                                    savedKey === saveKey ? 'bg-green-600 text-white'
+                                    : hasDraft ? 'bg-orange-600 text-white hover:bg-orange-500'
+                                    : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
+                                  }`}>
+                                  {saving === saveKey ? (
+                                    <><svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" /></svg>Saving...</>
+                                  ) : savedKey === saveKey ? '✓ Saved'
+                                  : 'Save'}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {/* Add instance row (for multi-instance integrations) */}
+                        {integration.supportsMultipleInstances && (
+                          <div className="border-t border-zinc-800/40 px-4 py-2.5 bg-zinc-900/20 flex items-center gap-2">
+                            <span className="text-xs text-zinc-700">+ Add instance:</span>
+                            <input
+                              value={newInstanceNames[integration.id] ?? ''}
+                              onChange={e => setNewInstanceNames(prev => ({ ...prev, [integration.id]: e.target.value }))}
+                              onKeyDown={e => { if (e.key === 'Enter') handleAddInstance(integration); }}
+                              placeholder="e.g. production, staging, us-east"
+                              className="flex-1 rounded border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-300 placeholder-zinc-700 outline-none focus:border-zinc-700 font-mono"
+                            />
+                            <button onClick={() => handleAddInstance(integration)}
+                              disabled={!newInstanceNames[integration.id]?.trim()}
+                              className="rounded px-3 py-1 text-xs font-medium text-zinc-500 border border-zinc-700 hover:text-zinc-300 disabled:opacity-40 transition">
+                              Add
+                            </button>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
