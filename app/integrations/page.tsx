@@ -101,7 +101,7 @@ export default function IntegrationsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
             <div>
               <p className="text-green-400 font-medium mb-1">✅ Hosted (remote HTTP — just add credentials)</p>
-              <p className="text-zinc-600">Dagster · Stripe · Vercel · Neon</p>
+              <p className="text-zinc-600">Dagster · Stripe · Vercel · Neon · Prefect (via FastMCP Cloud)</p>
               <p className="text-zinc-700 mt-0.5">Add URL + headers to .cursor/mcp.json — done.</p>
             </div>
             <div>
@@ -271,9 +271,11 @@ function getIntegrationStatus(): Integration[] {
     {
       id: 'prefect', group: 'orchestration', icon: '🌀', name: 'Prefect',
       status: env('PREFECT_API_URL') ? 'connected' : 'disabled',
-      description: 'Flow run context, task state, deployment history.',
-      dataProvided: ['Flow run logs and state', 'Task-level error details', 'Deployment version context'],
-      envVars: ['PREFECT_API_URL', 'PREFECT_API_KEY'], file: 'lib/integrations/prefect.ts',
+      description: 'Flow run context, task state, concurrency debugging. Hosted MCP via FastMCP Cloud.',
+      dataProvided: ['Why is flow X failing? (logs + events)', 'Concurrency limits + work pool status', 'Cancel late runs via MCP', 'Hosted: deploy to FastMCP Cloud → team endpoint'],
+      envVars: ['PREFECT_API_KEY'], file: 'lib/integrations/prefect.ts',
+      docsUrl: 'https://www.prefect.io/blog/a-prefect-mcp-server',
+      setupNote: '✅ HOSTED: uvx --from prefect-mcp prefect-mcp-server → deploy to FastMCP Cloud',
     },
     {
       id: 'dbt-cloud-jobs', group: 'orchestration', icon: '🔄', name: 'dbt Cloud (Scheduler)',

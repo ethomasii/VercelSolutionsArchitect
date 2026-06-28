@@ -11,6 +11,43 @@
 When a data pipeline fails, on-call engineers need two layers of context:
 
 **Layer 1 — Technical signals** (vendors partially cover this)
+- Dagster/Airflow run logs and asset status
+- dbt job results and compilation errors
+- GitHub: what changed recently in relevant files
+- Upstream sync status (Fivetran, Airbyte, etc.)
+
+**Layer 2 — Institutional knowledge** (no vendor covers this)
+- Internal runbooks: "when THIS pipeline fails, check THESE things first"
+- Incident history: the last N times this fired, how was it resolved?
+- Git context: was there a PR merged 4 hours ago that touched this model?
+- Team tribal knowledge: known flaky sources, maintenance windows, quirks
+
+The key insight: orchestration vendors like Dagster, dbt, and Snowflake each
+know their own slice. No vendor touches the institutional layer: runbooks, incident history, git context.
+
+**Cascade runbook search:** A dbt failure is often caused by a Fivetran sync that ran upstream but
+isn't mentioned in the dbt error log at all. Dispatch searches runbooks for BOTH the failing pipeline
+AND any pipelines found in the upstream failure history — bridging tools that aren't directly connected.
+
+## 2. Why This Is A Vercel Customer Story
+
+> Already on Vercel? Dispatch is one `vercel deploy` away.
+
+This isn't a generic SaaS tool. It's a pattern for Vercel customers who already run their application
+on Vercel and want to extend the same platform to their data engineering team:
+
+- **AI Gateway** — same unified model routing your LLM features already use
+- **Neon (Marketplace)** — same database tier, one-click provision
+- **Fluid Compute** — handles 4-tool sequences with 60s timeouts at zero idle cost
+- **Cron Jobs** — periodic Dagster run sync, same cron.ts you'd use for any background job
+- **Streaming** — same `streamText` + `useChat` pattern from your chat features
+- **Edge Middleware** — org_id injection, same proxy.ts you'd use for auth
+
+One platform. One bill. One deployment pipeline. Your data team gets AI triage without a DevOps team.
+
+When a data pipeline fails, on-call engineers need two layers of context:
+
+**Layer 1 — Technical signals** (vendors partially cover this)
 - Dagster run logs and asset status
 - dbt job results and compilation errors
 - GitHub: what changed recently in relevant files

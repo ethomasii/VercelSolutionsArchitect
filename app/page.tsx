@@ -82,6 +82,9 @@ export default async function HomePage() {
           <span className="inline-flex items-center rounded-full bg-orange-500/10 px-3 py-1 text-xs font-medium text-orange-400 ring-1 ring-orange-500/20">
             AI-powered triage
           </span>
+          <span className="inline-flex items-center rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-500">
+            Built for Vercel customers
+          </span>
         </div>
 
         <h1 className="text-5xl font-bold tracking-tight text-white mb-4">Dispatch</h1>
@@ -89,9 +92,14 @@ export default async function HomePage() {
           Cross-stack pipeline incident triage.{' '}
           <span className="text-zinc-200">Technical signals + institutional knowledge</span>, synthesized in seconds.
         </p>
-        <p className="text-sm text-zinc-500 max-w-xl mb-8">
+        <p className="text-sm text-zinc-500 max-w-xl mb-2">
           Searches runbooks, incident history, git context, and live vendor status —
           across every tool in your stack, not just the one that fired the alert.
+        </p>
+        <p className="text-xs text-zinc-700 max-w-xl mb-8">
+          Already on Vercel? Dispatch is one{' '}
+          <code className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-zinc-500">vercel deploy</code> away.
+          Same AI Gateway, same Neon, same platform — your data team gets AI triage with zero new infrastructure.
         </p>
 
         <div className="flex items-center gap-4 flex-wrap">

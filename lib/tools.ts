@@ -66,76 +66,78 @@ Classification guidance for ambiguous cases:
   }),
 
   searchRunbooks: tool({
-    description: `Search internal runbooks for guidance on this failure type.
-Call after classifyFailure. Returns matching runbook entries with remediation steps.`,
+    description: `Search internal runbooks for guidance on this failure.
+
+CASCADE SEARCH: Call this ONCE with both the primary pipeline AND any upstream pipelines
+found in lookupIncidentHistory. If fivetran_orders_daily failed 30min before dbt_customers_transform,
+include it in upstreamPipelines — even if it's not mentioned in the error log. Its runbook
+may contain the root cause. This is how Dispatch bridges unconnected tools: the runbooks
+encode the institutional knowledge that no tool captures automatically.`,
     inputSchema: z.object({
       failureType: z.string(),
       pipelineName: z.string().optional(),
       keywords: z.array(z.string()),
+      upstreamPipelines: z.array(z.string()).optional().describe(
+        'Pipeline names from lookupIncidentHistory.recentUpstreamFailures — search their runbooks too'
+      ),
     }),
-    execute: async ({ failureType, pipelineName, keywords }) => {
+    execute: async ({ failureType, pipelineName, upstreamPipelines = [] }) => {
       const orgId = 'default';
+      const pipelineTag = pipelineName ? pipelineName.split('_')[0].toLowerCase() : null;
 
-      // Extract the first meaningful word from pipeline name as a vendor/tech tag.
-      // e.g. "snowflake_raw_ingestion" → "snowflake", "fivetran_orders_daily" → "fivetran"
-      // Used as a secondary search signal to make retrieval robust against misclassification.
-      const pipelineTag = pipelineName
-        ? pipelineName.split('_')[0].toLowerCase()
-        : null;
-
-      // Multi-signal scoring: prefer runbooks that match BOTH failure_type AND
-      // pipeline vendor tag. If classification is wrong (e.g. "does not exist or not
-      // authorized" classified as upstream_data_missing instead of permission_denied),
-      // the pipeline tag match still surfaces the right Snowflake runbook.
-      //
-      // Score:
-      //   failure_type AND pipeline tag match: 15  ← most specific
-      //   pipeline tag match only:             10  ← vendor-specific beats wrong-type match
-      //   failure_type match only:              5  ← generic type match, lowest priority
-      const rows = pipelineTag
+      // Primary: failure_type + pipeline vendor tag scoring
+      const primaryRows = pipelineTag
         ? await sql`
             SELECT title, content, remediation_steps, last_updated, author,
               (CASE WHEN failure_type = ${failureType} THEN 5 ELSE 0 END +
                CASE WHEN ${pipelineTag} = ANY(pipeline_tags) THEN 10 ELSE 0 END) AS score
             FROM runbooks
             WHERE org_id = ${orgId}
-              AND (
-                failure_type = ${failureType}
-                OR ${pipelineTag} = ANY(pipeline_tags)
-              )
-            ORDER BY score DESC, last_updated DESC
-            LIMIT 3
+              AND (failure_type = ${failureType} OR ${pipelineTag} = ANY(pipeline_tags))
+            ORDER BY score DESC, last_updated DESC LIMIT 3
           `
         : await sql`
-            SELECT title, content, remediation_steps, last_updated, author,
-              10 AS score
-            FROM runbooks
-            WHERE org_id = ${orgId}
-              AND failure_type = ${failureType}
-            ORDER BY last_updated DESC
-            LIMIT 3
+            SELECT title, content, remediation_steps, last_updated, author, 5 AS score
+            FROM runbooks WHERE org_id = ${orgId} AND failure_type = ${failureType}
+            ORDER BY last_updated DESC LIMIT 3
           `;
 
-      // Fallback: broader text search if nothing matched above
+      // Cascade: search runbooks for each inferred upstream pipeline
+      // Key insight: even though dbt's log doesn't mention Fivetran, if Fivetran
+      // failed upstream, its runbook explains the root cause.
+      const upstreamResults: typeof primaryRows = [];
+      for (const upstreamPipeline of upstreamPipelines.slice(0, 3)) {
+        const upstreamTag = upstreamPipeline.split('_')[0].toLowerCase();
+        const existingTitles = primaryRows.map(r => r.title as string);
+        const rows = await sql`
+          SELECT title, content, remediation_steps, last_updated, author, 8 AS score
+          FROM runbooks
+          WHERE org_id = ${orgId}
+            AND ${upstreamTag} = ANY(pipeline_tags)
+            AND title != ALL(${existingTitles})
+          ORDER BY last_updated DESC LIMIT 2
+        `;
+        upstreamResults.push(...rows);
+      }
+
+      // Fallback text search
       const fallbackRows =
-        rows.length === 0
+        primaryRows.length === 0 && upstreamResults.length === 0
           ? await sql`
-              SELECT title, content, remediation_steps, last_updated, author,
-                1 AS score
-              FROM runbooks
-              WHERE org_id = ${orgId}
+              SELECT title, content, remediation_steps, last_updated, author, 1 AS score
+              FROM runbooks WHERE org_id = ${orgId}
                 AND to_tsvector('english', content || ' ' || title)
                     @@ plainto_tsquery('english', ${[failureType, pipelineName].filter(Boolean).join(' ')})
-              ORDER BY last_updated DESC
-              LIMIT 3
+              ORDER BY last_updated DESC LIMIT 3
             `
           : [];
 
       const confluenceResults = await searchConfluence(failureType, failureType);
 
       const allResults = [
-        ...rows.map(r => ({ ...r, source: 'internal_runbook' })),
-        ...fallbackRows.map(r => ({ ...r, source: 'internal_runbook' })),
+        ...primaryRows.map(r => ({ ...r, source: 'internal_runbook', context: 'primary' })),
+        ...upstreamResults.map(r => ({ ...r, source: 'internal_runbook', context: 'upstream_pipeline' })),
+        ...fallbackRows.map(r => ({ ...r, source: 'internal_runbook', context: 'text_search' })),
         ...confluenceResults,
       ];
 
@@ -143,6 +145,7 @@ Call after classifyFailure. Returns matching runbook entries with remediation st
         found: allResults.length > 0,
         runbooks: allResults,
         searchTerm: failureType,
+        upstreamPipelinesSearched: upstreamPipelines,
       };
     },
   }),
