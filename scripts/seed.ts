@@ -524,6 +524,30 @@ that break enum constraints in our dbt tests.`,
       is_likely_cause: false,
       source: 'simulated',
     },
+
+    // dbt_marketing_attribution: smoking gun — stg_ad_spend renamed 6h ago
+    {
+      pipeline_name: 'dbt_marketing_attribution',
+      commit_sha: 'k7m3n9p',
+      pr_number: 249,
+      pr_title: 'rename stg_ad_spend to stg_ad_spend_daily for clarity',
+      author: 'marcus-t',
+      changed_files: ['models/staging/google_ads/stg_ad_spend.sql', 'models/staging/google_ads/stg_ad_spend_daily.sql'],
+      committed_at: new Date(now.getTime() - 6 * 60 * 60 * 1000).toISOString(),
+      is_likely_cause: true,
+      source: 'simulated',
+    },
+    {
+      pipeline_name: 'dbt_marketing_attribution',
+      commit_sha: 'j2k8l4q',
+      pr_number: 245,
+      pr_title: 'add new google ads spend metrics',
+      author: 'sarah-k',
+      changed_files: ['models/staging/google_ads/stg_ad_spend.sql'],
+      committed_at: daysAgo(3),
+      is_likely_cause: false,
+      source: 'simulated',
+    },
   ];
 
   for (const g of gitRows) {
@@ -591,8 +615,8 @@ that break enum constraints in our dbt tests.`,
       expected_keywords: ['ref', 'rename', 'compile'],
       forbidden_patterns: [],
       should_find_runbook: true,
-      should_find_git_cause: false,
-      notes: 'No runbook gap expected. Should recommend checking git for recent model renames.',
+      should_find_git_cause: true,
+      notes: 'PR #249 renamed stg_ad_spend → stg_ad_spend_daily 6h ago. Agent must find it.',
     },
     {
       name: 'Databricks resource exhaustion',
