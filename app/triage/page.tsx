@@ -268,6 +268,45 @@ function ToolDetail({ toolName, output }: { toolName: string; output: unknown })
     );
   }
 
+  if (toolName === 'checkVendorStatus') {
+    const o = output as {
+      checked?: Array<{ vendor: string; level: string; description: string; activeIncidents?: Array<{ name: string; status: string; impact: string }> }>;
+      summary?: string;
+      hasActiveIncidents?: boolean;
+    } | undefined;
+    if (!o?.checked?.length) return <p className="text-xs text-zinc-600 italic">No vendors checked.</p>;
+    return (
+      <div className="space-y-2">
+        <p className={`text-xs font-medium ${o.hasActiveIncidents ? 'text-red-400' : 'text-green-400'}`}>
+          {o.summary}
+        </p>
+        <div className="space-y-1.5">
+          {o.checked.map((v, i) => (
+            <div key={i} className={`flex items-center gap-3 rounded border px-3 py-1.5 ${
+              v.level === 'operational' ? 'border-zinc-800/60 bg-zinc-900/30'
+              : v.level === 'outage' ? 'border-red-800/40 bg-red-950/20'
+              : 'border-amber-800/30 bg-amber-950/10'
+            }`}>
+              <span className={`h-2 w-2 rounded-full shrink-0 ${
+                v.level === 'operational' ? 'bg-green-500'
+                : v.level === 'outage' ? 'bg-red-500'
+                : v.level === 'degraded' ? 'bg-amber-500'
+                : 'bg-zinc-500'
+              }`} />
+              <span className="text-xs font-medium text-zinc-300 capitalize w-20">{v.vendor}</span>
+              <span className={`text-xs ${v.level === 'operational' ? 'text-zinc-600' : v.level === 'outage' ? 'text-red-400' : 'text-amber-400'}`}>
+                {v.description}
+              </span>
+              {v.activeIncidents?.map((inc, j) => (
+                <span key={j} className="text-xs text-red-400 ml-auto">{inc.name}</span>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return null;
 }
 
@@ -304,6 +343,11 @@ function getToolSummary(toolName: string, part: ToolPartGeneric): string {
     const count = r?.commits?.length ?? 0;
     return count > 0 ? `${count} recent commit${count !== 1 ? 's' : ''}` : 'no recent changes found';
   }
+  if (toolName === 'checkVendorStatus') {
+    const r = o as { summary?: string; hasActiveIncidents?: boolean } | undefined;
+    const prefix = r?.hasActiveIncidents ? '🔴 ' : '✅ ';
+    return `${prefix}${r?.summary ?? 'checked'}`;
+  }
   return 'completed';
 }
 
@@ -312,6 +356,7 @@ const TOOL_META: Record<string, { icon: string; label: string; loadingLabel: str
   searchRunbooks: { icon: '📚', label: 'Runbooks', loadingLabel: 'Searching runbooks...' },
   lookupIncidentHistory: { icon: '🔍', label: 'Incident history', loadingLabel: 'Checking incident history...' },
   searchGitContext: { icon: '🔀', label: 'Git context', loadingLabel: 'Searching git context...' },
+  checkVendorStatus: { icon: '🌐', label: 'Vendor status', loadingLabel: 'Checking vendor status pages...' },
 };
 
 function ToolStep({ toolName, part }: { toolName: string; part: ToolPartGeneric }) {

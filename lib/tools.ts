@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { sql } from './db';
 import { getRecentChanges } from './integrations/github';
 import { searchRunbooks as searchConfluence } from './integrations/confluence';
+import { checkVendorStatus, detectVendors } from './vendor-status';
 
 // This file is the architectural core of Dispatch. The tool interface never
 // changes — only the execute() function bodies change as we wire up real
@@ -234,6 +235,47 @@ or schema_mismatch classification.`,
       // To wire up real GitHub: set GITHUB_TOKEN env var and update github.ts.
       // This tool's interface never changes — only the integration implementation.
       return await getRecentChanges(pipelineName, hoursBack);
+    },
+  }),
+
+  checkVendorStatus: tool({
+    description: `Check real-time vendor status pages for active incidents or degradation.
+Call this whenever the failure might be caused by a vendor outage:
+- upstream_data_missing → always check (Fivetran, Shopify, Salesforce)
+- resource_exhaustion → check Snowflake, Databricks
+- network_timeout → check the external API vendor
+- schema_mismatch → skip (not vendor status related)
+
+A vendor outage changes the entire remediation: "wait for Fivetran recovery" not "debug your dbt code."
+Uses public StatusPage.io APIs — no auth required.`,
+    inputSchema: z.object({
+      pipelineName: z.string(),
+      failureType: z.string(),
+      vendors: z.array(z.string()).optional().describe('Override vendor list if you know specific vendors'),
+    }),
+    execute: async ({ pipelineName, failureType, vendors }) => {
+      const vendorList = vendors?.length
+        ? vendors.map(v => v.toLowerCase())
+        : detectVendors(pipelineName, failureType);
+
+      if (vendorList.length === 0) {
+        return { checked: [], summary: 'No relevant vendors identified for status check.' };
+      }
+
+      const results = await Promise.all(vendorList.map(v => checkVendorStatus(v)));
+      const incidents = results.filter(r => r.activeIncidents.length > 0);
+      const degraded = results.filter(r => r.level !== 'operational' && r.level !== 'unknown');
+
+      return {
+        checked: results,
+        hasActiveIncidents: incidents.length > 0,
+        degradedVendors: degraded.map(r => r.vendor),
+        summary: incidents.length > 0
+          ? `⚠️ Active incidents: ${incidents.map(r => `${r.vendor} (${r.description})`).join(', ')}`
+          : degraded.length > 0
+          ? `${degraded.map(r => r.vendor).join(', ')} reporting degraded performance`
+          : `All checked vendors operational (${vendorList.join(', ')})`,
+      };
     },
   }),
 };
