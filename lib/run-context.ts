@@ -43,32 +43,87 @@ export const SAMPLE_RUN_IDS: Array<{ id: string; label: string; description: str
     label: 'Snowflake table freshness failure — trace upstream across 4 tools',
     description: 'RAW.SHOPIFY.ORDERS stale in Snowflake. Need to check: Fivetran sync → dbt sources → Dagster asset → upstream Shopify API. Classic cross-vendor lineage problem.',
   },
+  {
+    id: 'a227a58f-192e-4491-a963-04d713b07d89',
+    label: 'hooli data-eng-prod: run_etl_pipeline FAILURE (enriched_data.process_chunk[9])',
+    description: 'Real Dagster run from hooli/data-eng-prod. batch_enrichment code location. Retried and still failed. Git commit: 2cc6f2c.',
+  },
 ];
 
-export async function resolveRunId(runId: string): Promise<RunContext | null> {
-  // TODO: Replace these stubs with real API calls based on orchestrator detection:
-  //   if (runId.startsWith('dagster:')) return fetchDagsterRun(runId)
-  //   if (runId.startsWith('dbt:')) return fetchDbtCloudRun(runId)
-  //   if (runId.startsWith('airflow:')) return fetchAirflowRun(runId)
-  //   return detectOrchestratorAndFetch(runId)
+import { getRunStatus, getRunLogs } from './integrations/dagster';
 
+export async function resolveRunId(runId: string): Promise<RunContext | null> {
   const normalized = runId.trim().toLowerCase();
 
-  if (normalized.includes('silent-upstream')) {
-    return buildSilentUpstreamContext(runId);
-  }
-  if (normalized.includes('schema-drift')) {
-    return buildSchemaDriftContext(runId);
-  }
-  if (normalized.includes('airflow-dbt')) {
-    return buildAirflowDbtContext(runId);
-  }
+  // Named simulated scenarios
+  if (normalized.includes('silent-upstream')) return buildSilentUpstreamContext(runId);
+  if (normalized.includes('schema-drift')) return buildSchemaDriftContext(runId);
+  if (normalized.includes('airflow-dbt')) return buildAirflowDbtContext(runId);
+  if (normalized.includes('snowflake-lineage')) return buildSnowflakeLineageContext(runId);
 
-  if (normalized.includes('snowflake-lineage')) {
-    return buildSnowflakeLineageContext(runId);
-  }
+  // Real Dagster UUID — try live API first
+  const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId.trim());
+  if (isUUID) return fetchRealDagsterRun(runId.trim());
 
   return null;
+}
+
+async function fetchRealDagsterRun(runId: string): Promise<RunContext | null> {
+  const run = await getRunStatus(runId);
+  const logs = await getRunLogs(runId, 30);
+
+  if (run.source === 'unavailable') {
+    return {
+      runId, orchestrator: 'dagster', failedAsset: 'unknown',
+      startedAt: new Date().toISOString(), failedAt: new Date().toISOString(),
+      enrichedPrompt: `Triage pipeline failure for Dagster run: ${runId}
+
+STATUS: Dagster credentials not configured — cannot fetch live run context.
+
+To unlock live context for this run:
+  1. Go to /settings and fill in:
+     - DAGSTER_HOST: https://your-org.dagster.cloud
+     - DAGSTER_TOKEN: your user token (Admin → User Tokens)
+     - DAGSTER_ORG: your organization slug
+  2. Re-submit this run ID
+
+Run ID: ${runId}
+Please paste the error log manually, or configure Dagster credentials in /settings.`,
+      source: 'simulated',
+    };
+  }
+
+  const errorEvents = logs.events.filter(e =>
+    e.eventType.includes('FAILURE') || e.eventType.includes('ERROR') || e.level === 'ERROR'
+  );
+  const commitInfo = run.commitHash
+    ? `\nGit commit: ${run.commitHash}${run.repoUrl ? `\nRepo: ${run.repoUrl}` : ''}`
+    : '';
+
+  const enrichedPrompt = `Triage pipeline failure for Dagster run: ${runId}
+
+DAGSTER RUN CONTEXT (live from ${run.source === 'live' ? 'data-eng-prod' : 'dagster'}):
+- Job: ${run.jobName ?? 'unknown'}
+- Status: ${run.status ?? 'FAILURE'}
+- Failed step: ${run.failureStep ?? run.assetKey ?? 'unknown'}
+- Failure reason: ${run.failureDescription ?? 'STEP_FAILURE'}
+- Started: ${run.startTime ?? 'unknown'}
+- Ended: ${run.endTime ?? 'unknown'}${commitInfo}
+
+ERROR LOG EVENTS:
+${errorEvents.map(e => `  [${e.level}] ${e.eventType}: ${e.message.slice(0, 200)}`).join('\n') || '  No explicit error events found — check stepKey failures below'}
+
+ALL LOG EVENTS (${logs.events.length} total):
+${logs.events.map(e => `  [${e.level}] ${e.eventType}${e.stepKey ? ` (${e.stepKey})` : ''}: ${e.message.slice(0, 120)}`).join('\n')}
+
+SOURCE: Live data from Dagster MCP (${run.source})`;
+
+  return {
+    runId, orchestrator: 'dagster', failedAsset: run.jobName ?? 'unknown',
+    startedAt: run.startTime ?? new Date().toISOString(),
+    failedAt: run.endTime ?? new Date().toISOString(),
+    enrichedPrompt, source: 'dagster_api',
+  };
 }
 
 // -------------------------------------------------------------------

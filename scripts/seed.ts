@@ -548,6 +548,30 @@ that break enum constraints in our dbt tests.`,
       is_likely_cause: false,
       source: 'simulated',
     },
+
+    // hooli real pipeline names (from data-eng-prod deployment)
+    {
+      pipeline_name: 'run_etl_pipeline',
+      commit_sha: '2cc6f2c',
+      pr_number: 312,
+      pr_title: 'increase batch size for enriched_data chunks from 8 to 12',
+      author: 'data-eng-team',
+      changed_files: ['batch_enrichment/assets/enriched_data.py', 'batch_enrichment/config.yaml'],
+      committed_at: new Date(now.getTime() - 3 * 60 * 60 * 1000).toISOString(),
+      is_likely_cause: true,
+      source: 'simulated',
+    },
+    {
+      pipeline_name: 'orders_augmented',
+      commit_sha: 'aae00c4',
+      pr_number: 308,
+      pr_title: 'add company revenue tier to orders_augmented model',
+      author: 'analytics-eng',
+      changed_files: ['data_eng_pipeline/models/analytics/orders_augmented.sql'],
+      committed_at: daysAgo(2),
+      is_likely_cause: false,
+      source: 'simulated',
+    },
   ];
 
   for (const g of gitRows) {
