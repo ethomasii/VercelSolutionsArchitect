@@ -105,7 +105,7 @@ export function detectVendors(pipelineName: string, failureType: string): string
   if (name.includes('databricks')) vendors.push('databricks');
   // Shopify status IS useful (API rate limits kill Fivetran syncs) but Shopify MCP is merchant-facing
   if (name.includes('shopify') || name.includes('orders')) vendors.push('shopify');
-  if (name.includes('salesforce') || name.includes('sfdc')) vendors.push('salesforce');
+  if (name.includes('salesforce') || name.includes('sfdc') || name.includes('crm')) vendors.push('salesforce');
   if (name.includes('stripe') || name.includes('payment')) vendors.push('stripe');
   if (name.includes('github')) vendors.push('github');
   if (name.includes('airflow') || name.includes('astronomer')) vendors.push('airflow');

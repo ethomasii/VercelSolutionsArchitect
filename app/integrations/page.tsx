@@ -101,8 +101,8 @@ export default function IntegrationsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
             <div>
               <p className="text-green-400 font-medium mb-1">✅ Hosted (remote HTTP — just add credentials)</p>
-              <p className="text-zinc-600">Dagster · Stripe · Vercel · Neon · Prefect (FastMCP Cloud) · Notion · Atlassian (Confluence + Jira)</p>
-              <p className="text-zinc-700 mt-0.5">Add URL + headers to .cursor/mcp.json — done. Atlassian Rovo covers Confluence AND Jira in one OAuth connection.</p>
+              <p className="text-zinc-600">Dagster · Stripe · Vercel · Neon · Prefect (FastMCP Cloud) · Notion · Atlassian (Confluence + Jira) · Salesforce</p>
+              <p className="text-zinc-700 mt-0.5">All GA as of 2026. Atlassian Rovo covers Confluence + Jira in one connection. Salesforce requires enabling in Setup → API Catalog → MCP Servers.</p>
             </div>
             <div>
               <p className="text-amber-400 font-medium mb-1">⚠️ Self-hosted (local process — run uvx locally)</p>
@@ -318,6 +318,20 @@ function getIntegrationStatus(): Integration[] {
       description: 'Recent commits, PRs, dbt sources.yml for lineage mapping.',
       dataProvided: ['Real commit history + PR diffs', 'dbt sources.yml: maps Fivetran connectors to models', 'File-level blame for breaking changes', 'GitHub Actions logs (same token)'],
       envVars: ['GITHUB_TOKEN', 'GITHUB_REPO_OWNER', 'GITHUB_REPO_NAME'], file: 'lib/integrations/github.ts',
+    },
+    {
+      id: 'salesforce', group: 'knowledge', icon: '☁️', name: 'Salesforce',
+      status: env('SALESFORCE_ACCESS_TOKEN') ? 'connected' : 'disabled',
+      description: 'Live Salesforce schema and object data. When a Salesforce field rename causes a dbt failure, the MCP confirms the source-of-truth schema change.',
+      dataProvided: [
+        'Object schema: did a field get renamed/added in Salesforce?',
+        'SOQL queries: verify data directly at the source before debugging dbt',
+        'Flow and Apex action inspection (custom server config)',
+        'Audit trail: who changed what in Salesforce and when',
+      ],
+      envVars: ['SALESFORCE_ACCESS_TOKEN', 'SALESFORCE_ORG_URL'], file: 'lib/integrations/salesforce.ts',
+      docsUrl: 'https://developer.salesforce.com/blogs/2026/04/salesforce-hosted-mcp-servers-are-now-generally-available',
+      setupNote: '✅ HOSTED MCP (GA): Setup → API Catalog → MCP Servers in your Salesforce org. OAuth + PKCE.',
     },
     {
       id: 'confluence', group: 'knowledge', icon: '📖', name: 'Confluence',
