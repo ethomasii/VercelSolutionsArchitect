@@ -5,6 +5,7 @@ import { DefaultChatTransport } from 'ai';
 import { useSearchParams } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { SAMPLE_RUN_IDS } from '@/lib/run-context';
 
 // -------------------------------------------------------------------
 // Lightweight markdown renderer
@@ -418,7 +419,11 @@ export default function TriagePage() {
 function TriagePageInner() {
   const searchParams = useSearchParams();
   const prefillLog = searchParams.get('log') ?? '';
+  const [inputMode, setInputMode] = useState<'log' | 'runid'>('log');
   const [input, setInput] = useState(prefillLog);
+  const [runId, setRunId] = useState('');
+  const [runIdLoading, setRunIdLoading] = useState(false);
+  const [runIdError, setRunIdError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -454,6 +459,30 @@ function TriagePageInner() {
     });
   }, [reportText]);
 
+  // Resolve a run ID to enriched context, then send to the agent
+  const handleRunIdSubmit = async () => {
+    if (!runId.trim() || isStreaming) return;
+    setRunIdLoading(true);
+    setRunIdError(null);
+    try {
+      const res = await fetch('/api/run-context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runId: runId.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRunIdError(data.error ?? `HTTP ${res.status}`);
+        return;
+      }
+      sendMessage({ text: data.enrichedPrompt });
+    } catch (err) {
+      setRunIdError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRunIdLoading(false);
+    }
+  };
+
   return (
     <div className="flex h-screen flex-col bg-zinc-950 text-zinc-100">
       <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-3 shrink-0">
@@ -475,8 +504,7 @@ function TriagePageInner() {
         <div className="mx-auto max-w-3xl px-6 py-6 space-y-8">
           {messages.length === 0 && !isStreaming && (
             <div className="text-center py-20">
-              <p className="text-zinc-600 text-sm">Paste a pipeline error log below to start triage.</p>
-              <p className="text-zinc-700 text-xs mt-1">Dispatch classifies the failure, searches runbooks, checks incident history, and looks for recent code changes.</p>
+              <p className="text-zinc-600 text-sm">Choose an input mode below to start triage.</p>
             </div>
           )}
 
@@ -485,8 +513,12 @@ function TriagePageInner() {
               {message.role === 'user' ? (
                 <div className="flex justify-end">
                   <div className="max-w-2xl rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3">
-                    <p className="text-xs text-zinc-600 mb-1.5 font-medium">Error log</p>
-                    <pre className="text-xs text-zinc-500 whitespace-pre-wrap font-mono leading-relaxed overflow-x-auto">
+                    <p className="text-xs text-zinc-600 mb-1.5 font-medium">
+                      {message.parts.filter((p: UIMessagePart) => p.type === 'text').map((p: UIMessagePart) => p.text).join('').startsWith('Triage pipeline failure for run:')
+                        ? 'Run context (enriched by orchestrator)'
+                        : 'Error log'}
+                    </p>
+                    <pre className="text-xs text-zinc-500 whitespace-pre-wrap font-mono leading-relaxed overflow-x-auto max-h-48 overflow-y-auto">
                       {message.parts.filter((p: UIMessagePart) => p.type === 'text').map((p: UIMessagePart) => p.text).join('')}
                     </pre>
                   </div>
@@ -518,32 +550,99 @@ function TriagePageInner() {
         </div>
       </div>
 
+      {/* Input area */}
       <div className="border-t border-zinc-800 bg-zinc-950 px-6 py-4 shrink-0">
         <div className="mx-auto max-w-3xl">
-          <form onSubmit={e => {
-            e.preventDefault();
-            if (input.trim() && !isStreaming) { sendMessage({ text: input }); setInput(''); }
-          }}>
-            <div className="relative">
-              <textarea
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && input.trim() && !isStreaming) {
-                    e.preventDefault(); sendMessage({ text: input }); setInput('');
-                  }
-                }}
-                disabled={isStreaming}
-                placeholder="Paste pipeline error log here... (⌘+Enter to submit)"
-                rows={4}
-                className="w-full resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 pr-24 text-sm text-zinc-200 placeholder-zinc-600 outline-none transition focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700 disabled:opacity-50 font-mono"
-              />
-              <button type="submit" disabled={!input.trim() || isStreaming}
-                className="absolute bottom-3 right-3 rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40">
-                {isStreaming ? 'Analyzing...' : 'Triage →'}
-              </button>
+          {/* Tab switcher */}
+          <div className="flex items-center gap-1 mb-3 rounded-lg border border-zinc-800 bg-zinc-900 p-1 w-fit">
+            <button
+              onClick={() => setInputMode('log')}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${inputMode === 'log' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+              Error Log
+            </button>
+            <button
+              onClick={() => { setInputMode('runid'); setRunIdError(null); }}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${inputMode === 'runid' ? 'bg-zinc-700 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+              Run ID
+              <span className="ml-1.5 rounded bg-orange-500/20 px-1 py-0.5 text-xs text-orange-400">richer context</span>
+            </button>
+          </div>
+
+          {inputMode === 'log' ? (
+            <form onSubmit={e => {
+              e.preventDefault();
+              if (input.trim() && !isStreaming) { sendMessage({ text: input }); setInput(''); }
+            }}>
+              <div className="relative">
+                <textarea
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && input.trim() && !isStreaming) {
+                      e.preventDefault(); sendMessage({ text: input }); setInput('');
+                    }
+                  }}
+                  disabled={isStreaming}
+                  placeholder="Paste pipeline error log here... (⌘+Enter to submit)"
+                  rows={4}
+                  className="w-full resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 pr-24 text-sm text-zinc-200 placeholder-zinc-600 outline-none transition focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700 disabled:opacity-50 font-mono"
+                />
+                <button type="submit" disabled={!input.trim() || isStreaming}
+                  className="absolute bottom-3 right-3 rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40">
+                  {isStreaming ? 'Analyzing...' : 'Triage →'}
+                </button>
+              </div>
+              <p className="mt-1.5 text-xs text-zinc-700">
+                Log-snippet mode: useful for quick triage, limited by what the log contains.
+              </p>
+            </form>
+          ) : (
+            <div>
+              <div className="relative flex gap-2">
+                <input
+                  value={runId}
+                  onChange={e => { setRunId(e.target.value); setRunIdError(null); }}
+                  onKeyDown={e => { if (e.key === 'Enter') handleRunIdSubmit(); }}
+                  disabled={isStreaming || runIdLoading}
+                  placeholder="e.g. dag-run-silent-upstream or a real Dagster/Airflow run ID"
+                  className="flex-1 rounded-xl border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm text-zinc-200 placeholder-zinc-600 outline-none transition focus:border-zinc-700 focus:ring-1 focus:ring-zinc-700 disabled:opacity-50 font-mono"
+                />
+                <button
+                  onClick={handleRunIdSubmit}
+                  disabled={!runId.trim() || isStreaming || runIdLoading}
+                  className="rounded-xl bg-orange-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-40 shrink-0"
+                >
+                  {runIdLoading ? 'Fetching...' : isStreaming ? 'Analyzing...' : 'Fetch & Triage →'}
+                </button>
+              </div>
+
+              {runIdError && (
+                <p className="mt-2 text-xs text-red-400">{runIdError}</p>
+              )}
+
+              {/* Sample run IDs */}
+              <div className="mt-3 space-y-1.5">
+                <p className="text-xs text-zinc-600 mb-2">Sample run IDs (demonstrating key failure patterns):</p>
+                {SAMPLE_RUN_IDS.map(s => (
+                  <button
+                    key={s.id}
+                    onClick={() => { setRunId(s.id); setRunIdError(null); }}
+                    className="w-full text-left rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2 transition hover:border-zinc-700 hover:bg-zinc-900"
+                  >
+                    <div className="flex items-start gap-2">
+                      <code className="text-xs font-mono text-orange-400 shrink-0 mt-0.5">{s.id}</code>
+                    </div>
+                    <p className="text-xs text-zinc-500 mt-0.5">{s.description}</p>
+                  </button>
+                ))}
+                <p className="text-xs text-zinc-700 pt-1">
+                  With Dagster MCP: any real run ID → full asset graph + upstream context automatically.
+                </p>
+              </div>
             </div>
-          </form>
+          )}
         </div>
       </div>
     </div>
