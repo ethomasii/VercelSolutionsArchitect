@@ -324,4 +324,42 @@ A vendor outage transforms the remediation: "wait for recovery" not "debug code.
       };
     },
   }),
+
+  proposeActions: tool({
+    description: `After completing the triage (all 5 other tools run), propose concrete remediation
+actions the engineer can execute with one click. These turn the runbook from text into buttons.
+
+Call this LAST, after all other tools have run and you have the full picture.
+
+For each action:
+- Assign a risk level: "none" (read-only, info) | "low" (retrigger, idempotent) | "medium" (changes state)
+- Assign confidence: based on how certain you are this action will fix the problem
+- Mark requires_approval: true for anything that writes or costs money
+- Include specific params extracted from the log/context (connector names, run IDs, etc.)
+
+Action types and when to propose them:
+- "rerun_dagster": resource_exhaustion or code_regression where retrying makes sense
+- "trigger_fivetran_sync": upstream_data_missing + Fivetran identified
+- "create_jira_ticket": any High confidence failure worth tracking  
+- "create_slack_alert": always useful to notify the team
+- "mark_resolved": when the runbook says "wait and monitor"
+- "open_dashboard": link to the relevant vendor dashboard`,
+    inputSchema: z.object({
+      failureType: z.string(),
+      affectedPipeline: z.string(),
+      confidence: z.enum(['High', 'Medium', 'Low']),
+      actions: z.array(z.object({
+        id: z.enum(['rerun_dagster', 'trigger_fivetran_sync', 'create_jira_ticket', 'create_slack_alert', 'mark_resolved', 'open_dashboard', 'custom']),
+        label: z.string().describe('Short button label, e.g. "Trigger Fivetran re-sync"'),
+        description: z.string().describe('One sentence: what this does and why'),
+        risk: z.enum(['none', 'low', 'medium']),
+        actionConfidence: z.enum(['High', 'Medium', 'Low']).describe('How confident you are this fixes the issue'),
+        requiresApproval: z.boolean(),
+        params: z.record(z.string(), z.string()).optional().describe('Specific params from the log: connector IDs, run IDs, pipeline names'),
+      })).max(4),
+      reasoning: z.string().describe('Why these specific actions, in order of priority'),
+    }),
+    // Passthrough — model proposes actions, UI renders them as buttons, /api/remediate executes
+    execute: async (input) => input,
+  }),
 };

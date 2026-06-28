@@ -67,7 +67,7 @@ export async function GET() {
                 providerOptions: gatewayOptions,
                 stopWhen: isStepCount(8),
                 // Emit a step event after each tool call so the UI can show progress
-                onStepEnd({ toolCalls }) {
+                onStepEnd: ({ toolCalls }) => {
                   for (const tc of toolCalls ?? []) {
                     if (!(tc as { dynamic?: boolean }).dynamic) {
                       push(controller, {

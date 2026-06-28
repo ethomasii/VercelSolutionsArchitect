@@ -307,6 +307,38 @@ function ToolDetail({ toolName, output }: { toolName: string; output: unknown })
     );
   }
 
+  if (toolName === 'proposeActions') {
+    const o = output as {
+      actions?: Array<{
+        id: string; label: string; description: string;
+        risk: 'none' | 'low' | 'medium'; actionConfidence: string;
+        requiresApproval: boolean; params?: Record<string, string>;
+      }>;
+    } | undefined;
+    if (!o?.actions?.length) return <p className="text-xs text-zinc-600 italic">No actions proposed.</p>;
+    return (
+      <div className="space-y-2">
+        {o.actions.map((action, i) => (
+          <div key={i} className="flex items-start gap-3 rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2.5">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-0.5">
+                <span className="text-xs font-medium text-zinc-200">{action.label}</span>
+                <span className={`text-xs rounded px-1.5 py-0.5 ${
+                  action.risk === 'none' ? 'bg-zinc-800 text-zinc-500' :
+                  action.risk === 'low' ? 'bg-blue-500/10 text-blue-400' :
+                  'bg-amber-500/10 text-amber-400'
+                }`}>{action.risk} risk</span>
+                <span className="text-xs text-zinc-600">{action.actionConfidence} confidence</span>
+              </div>
+              <p className="text-xs text-zinc-500">{action.description}</p>
+            </div>
+          </div>
+        ))}
+        <p className="text-xs text-zinc-700 pt-1">Actions panel appears below the report ↓</p>
+      </div>
+    );
+  }
+
   return null;
 }
 
@@ -348,6 +380,11 @@ function getToolSummary(toolName: string, part: ToolPartGeneric): string {
     const prefix = r?.hasActiveIncidents ? '🔴 ' : '✅ ';
     return `${prefix}${r?.summary ?? 'checked'}`;
   }
+  if (toolName === 'proposeActions') {
+    const r = o as { actions?: Array<{ label: string }> } | undefined;
+    const count = r?.actions?.length ?? 0;
+    return `${count} action${count !== 1 ? 's' : ''} available`;
+  }
   return 'completed';
 }
 
@@ -357,6 +394,7 @@ const TOOL_META: Record<string, { icon: string; label: string; loadingLabel: str
   lookupIncidentHistory: { icon: '🔍', label: 'Incident history', loadingLabel: 'Checking incident history...' },
   searchGitContext: { icon: '🔀', label: 'Git context', loadingLabel: 'Searching git context...' },
   checkVendorStatus: { icon: '🌐', label: 'Vendor status', loadingLabel: 'Checking vendor status pages...' },
+  proposeActions: { icon: '🔧', label: 'Actions proposed', loadingLabel: 'Proposing remediation actions...' },
 };
 
 function ToolStep({ toolName, part }: { toolName: string; part: ToolPartGeneric }) {
@@ -420,14 +458,154 @@ function ToolStep({ toolName, part }: { toolName: string; part: ToolPartGeneric 
 }
 
 // -------------------------------------------------------------------
+// Actions Panel — proposed remediations from proposeActions tool
+// -------------------------------------------------------------------
+type ProposedAction = {
+  id: string; label: string; description: string;
+  risk: 'none' | 'low' | 'medium'; actionConfidence: string;
+  requiresApproval: boolean; params?: Record<string, string>;
+};
+
+function ActionsPanel({ actions, pipelineName, reportText }: {
+  actions: ProposedAction[];
+  pipelineName?: string;
+  reportText: string;
+}) {
+  const [executing, setExecuting] = useState<string | null>(null);
+  const [results, setResults] = useState<Record<string, { ok: boolean; message?: string; error?: string }>>({});
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  const RISK_ICONS: Record<string, string> = { none: '📋', low: '⚡', medium: '⚠️' };
+  const ACTION_ICONS: Record<string, string> = {
+    rerun_dagster: '↺',
+    trigger_fivetran_sync: '🔄',
+    create_jira_ticket: '🎫',
+    create_slack_alert: '💬',
+    mark_resolved: '✓',
+    open_dashboard: '↗',
+    custom: '▶',
+  };
+
+  const execute = async (action: ProposedAction) => {
+    if (action.requiresApproval && confirming !== action.id) {
+      setConfirming(action.id);
+      return;
+    }
+    setConfirming(null);
+    setExecuting(action.id);
+    try {
+      const res = await fetch('/api/remediate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actionId: action.id,
+          params: action.params ?? {},
+          pipelineName,
+          triageReport: reportText,
+        }),
+      });
+      const data = await res.json() as { ok: boolean; message?: string; error?: string; url?: string };
+      if (data.url) window.open(data.url, '_blank');
+      setResults(prev => ({ ...prev, [action.id]: data }));
+    } finally {
+      setExecuting(null);
+    }
+  };
+
+  if (actions.length === 0) return null;
+
+  return (
+    <div className="mt-5 rounded-xl border border-zinc-800 bg-zinc-900/30 overflow-hidden">
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-zinc-800/60 bg-zinc-900/50">
+        <span className="text-sm">🔧</span>
+        <span className="text-xs font-semibold text-zinc-300">Proposed Actions</span>
+        <span className="text-xs text-zinc-600 ml-1">— click to execute with approval</span>
+      </div>
+      <div className="divide-y divide-zinc-800/40">
+        {actions.map((action) => {
+          const result = results[action.id];
+          const isExecuting = executing === action.id;
+          const isConfirming = confirming === action.id;
+
+          return (
+            <div key={action.id} className="flex items-center gap-3 px-4 py-3">
+              <span className="text-base shrink-0">{ACTION_ICONS[action.id] ?? '▶'}</span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-zinc-200">{action.label}</span>
+                  <span className={`text-xs rounded px-1.5 py-0.5 ${
+                    action.risk === 'none' ? 'bg-zinc-800 text-zinc-500' :
+                    action.risk === 'low' ? 'bg-blue-500/10 text-blue-400' :
+                    'bg-amber-500/10 text-amber-400'
+                  }`}>{RISK_ICONS[action.risk]} {action.risk}</span>
+                </div>
+                <p className="text-xs text-zinc-500 mt-0.5">{action.description}</p>
+                {result && (
+                  <p className={`text-xs mt-1 font-medium ${result.ok ? 'text-green-400' : 'text-red-400'}`}>
+                    {result.ok ? `✓ ${result.message}` : `✗ ${result.error}`}
+                  </p>
+                )}
+              </div>
+              <div className="shrink-0">
+                {isConfirming ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs text-amber-400">Confirm?</span>
+                    <button onClick={() => execute(action)}
+                      className="rounded bg-orange-600 px-2.5 py-1 text-xs font-semibold text-white hover:bg-orange-500 transition">
+                      Yes, execute
+                    </button>
+                    <button onClick={() => setConfirming(null)}
+                      className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 transition">
+                      Cancel
+                    </button>
+                  </div>
+                ) : result ? (
+                  <span className={`text-xs ${result.ok ? 'text-green-500' : 'text-red-500'}`}>
+                    {result.ok ? '✓ Done' : '✗ Failed'}
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => execute(action)}
+                    disabled={isExecuting}
+                    className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-orange-500/50 hover:text-zinc-100 hover:bg-orange-500/5 disabled:opacity-40"
+                  >
+                    {isExecuting ? (
+                      <span className="flex items-center gap-1.5">
+                        <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                        </svg>
+                        Running...
+                      </span>
+                    ) : action.requiresApproval ? 'Execute ▶' : 'Run'}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// -------------------------------------------------------------------
 // Message rendering
 // -------------------------------------------------------------------
 type UIMessagePart = { type: string; text?: string; toolCallId?: string; state?: string; [key: string]: unknown };
 
-function MessageParts({ parts }: { parts: UIMessagePart[] }) {
+function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportText: string }) {
   const toolParts = parts.filter(p => p.type.startsWith('tool-'));
   const textParts = parts.filter(p => p.type === 'text' && p.text);
   const fullText = textParts.map(p => p.text).join('');
+
+  // Extract proposeActions output for the actions panel
+  const actionsPart = toolParts.find(p => p.type === 'tool-proposeActions');
+  const proposedActions = (actionsPart?.output as { actions?: ProposedAction[] } | undefined)?.actions ?? [];
+
+  // Extract pipeline name from classifyFailure for the remediation API
+  const classifyPart = toolParts.find(p => p.type === 'tool-classifyFailure');
+  const pipelineName = (classifyPart?.input as { affectedPipeline?: string } | undefined)?.affectedPipeline;
 
   return (
     <div>
@@ -446,6 +624,9 @@ function MessageParts({ parts }: { parts: UIMessagePart[] }) {
         </div>
       )}
       {fullText && <MarkdownReport text={fullText} />}
+      {proposedActions.length > 0 && (
+        <ActionsPanel actions={proposedActions} pipelineName={pipelineName} reportText={reportText} />
+      )}
     </div>
   );
 }
@@ -585,7 +766,7 @@ function TriagePageInner() {
                     )}
                   </div>
                   <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 px-5 py-1">
-                    <MessageParts parts={message.parts as UIMessagePart[]} />
+                    <MessageParts parts={message.parts as UIMessagePart[]} reportText={reportText} />
                   </div>
                 </div>
               )}
