@@ -816,7 +816,15 @@ Exit code: 1`,
       VALUES ('default', ${ec.name}, ${ec.input_log}, ${ec.expected_failure_type},
               ${ec.expected_keywords}, ${ec.forbidden_patterns}, ${ec.should_find_runbook},
               ${ec.should_find_git_cause}, ${ec.notes})
-      ON CONFLICT DO NOTHING
+      ON CONFLICT ON CONSTRAINT eval_cases_org_name_unique
+      DO UPDATE SET
+        input_log = EXCLUDED.input_log,
+        expected_failure_type = EXCLUDED.expected_failure_type,
+        expected_keywords = EXCLUDED.expected_keywords,
+        forbidden_patterns = EXCLUDED.forbidden_patterns,
+        should_find_runbook = EXCLUDED.should_find_runbook,
+        should_find_git_cause = EXCLUDED.should_find_git_cause,
+        notes = EXCLUDED.notes
     `;
   }
   console.log(`✅ Inserted ${evalCases.length} eval cases`);

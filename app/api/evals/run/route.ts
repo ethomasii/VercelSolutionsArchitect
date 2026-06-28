@@ -47,9 +47,10 @@ export async function GET() {
       push(controller, { type: 'start', total: cases.length });
       let passCount = 0;
 
-      // Run in batches of 2 to avoid rate limiting — 3 simultaneous requests
-      // hit the AI Gateway free tier per-minute RPM limit
-      const BATCH_SIZE = 2;
+      // Run sequentially with a 500ms gap — prevents AI Gateway rate limit errors
+      // when running 8 cases back-to-back on the free tier
+      const BATCH_SIZE = 1;
+      const BATCH_DELAY_MS = 500;
       for (let i = 0; i < cases.length; i += BATCH_SIZE) {
         const batch = cases.slice(i, i + BATCH_SIZE);
 
@@ -174,8 +175,13 @@ export async function GET() {
                 },
               });
             }
-          })
+          }          )
         );
+
+        // Small gap between batches to avoid RPM rate limits
+        if (i + BATCH_SIZE < cases.length) {
+          await new Promise(r => setTimeout(r, BATCH_DELAY_MS));
+        }
       }
 
       push(controller, {
