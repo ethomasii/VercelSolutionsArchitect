@@ -796,6 +796,56 @@ Pipeline: snowflake_raw_ingestion`,
       notes: 'Model correctly classifies as upstream_data_missing when it identifies Fivetran as root cause. Keywords validate the cascade narrative.',
     },
     {
+      name: 'Heterogeneous chain — dbt nulls from silent Fivetran via Snowflake Task',
+      input_log: `ERROR 2026-06-28 08:44:12 UTC [dbt] Test failures in mart layer
+  Test not_null_fct_revenue_customer_id: FAIL (3,891 failures)
+  Test not_null_fct_revenue_amount: FAIL (3,891 failures)
+  Model: fct_revenue (PROD.ANALYTICS.FCT_REVENUE)
+  Compiled SQL: SELECT * FROM PROD.STAGING.STG_ORDERS WHERE ...
+  Pipeline: revenue-mart-dbt`,
+      expected_failure_type: 'upstream_data_missing',
+      expected_keywords: ['Fivetran', 'upstream', 'root cause', 'trigger'],
+      forbidden_patterns: ['fix the dbt model', 'fix fct_revenue', 'dbt code'],
+      should_find_runbook: true,
+      should_find_git_cause: false,
+      notes: 'Hard case: the log mentions PROD.ANALYTICS.FCT_REVENUE and PROD.STAGING.STG_ORDERS. Agent must trace upstream (STAGING schema → dbt staging, RAW schema → Fivetran) and identify Fivetran as root cause — NOT propose fixing the dbt model. forbidden_patterns tests this explicitly.',
+    },
+    {
+      name: 'Lambda failure — no orchestrator, raw SQL error in CloudWatch',
+      input_log: `START RequestId: abc-123-def-456 Version: $LATEST
+  2026-06-28T09:12:33.445Z abc-123-def-456 INFO Running transform for date=2026-06-28
+  2026-06-28T09:12:35.102Z abc-123-def-456 ERROR snowflake.connector.errors.ProgrammingError:
+    002003 (42S02): SQL compilation error: Table 'PROD.STAGING.STG_CUSTOMERS' does not exist
+    at execute_query (handler.py:142)
+  2026-06-28T09:12:35.110Z abc-123-def-456 ERROR Failed to load customer dimension
+  END RequestId: abc-123-def-456
+  REPORT Duration: 1821.44 ms  Billed Duration: 1822 ms
+  AWS_LAMBDA_FUNCTION_NAME: transform-customers-daily`,
+      expected_failure_type: 'schema_mismatch',
+      expected_keywords: ['Lambda', 'STG_CUSTOMERS', 'dbt', 'staging'],
+      forbidden_patterns: ['rerun_dagster', 'Dagster run'],
+      should_find_runbook: true,
+      should_find_git_cause: false,
+      notes: 'No orchestrator: raw CloudWatch log from a Lambda. Agent must detect Lambda fingerprint (AWS_LAMBDA_FUNCTION_NAME), identify PROD.STAGING.STG_CUSTOMERS as dbt-owned (STAGING schema), and NOT propose rerun_dagster. Should propose create_pr or open_dashboard with AWS Console link.',
+    },
+    {
+      name: 'Airflow DAG numeric sequence — upstream DAG silent failure',
+      input_log: `[2026-06-28 10:33:12] {taskinstance.py:1288} ERROR - Task failed with exception
+  Traceback (most recent call last):
+    File "/opt/airflow/dags/03_dbt_revenue_models.py", line 78, in run_dbt
+      assert row_count > 0, f"Expected rows in stg_orders, got 0"
+  AssertionError: Expected rows in stg_orders, got 0
+  dag_id: 03_dbt_revenue_models
+  task_id: validate_row_counts
+  run_id: scheduled__2026-06-28T10:00:00+00:00`,
+      expected_failure_type: 'upstream_data_missing',
+      expected_keywords: ['upstream', '01_ingest', '02_transform', 'Airflow'],
+      forbidden_patterns: ['fix the assertion', 'remove the assert'],
+      should_find_runbook: false,
+      should_find_git_cause: false,
+      notes: 'DAG 03_ failed but the root cause is upstream in 01_ or 02_. Agent must use numeric prefix inference (03 depends on 02 depends on 01) and recommend checking upstream DAGs — not removing the assertion.',
+    },
+    {
       name: 'Ambiguous log — insufficient info',
       input_log: `ERROR [pipeline] Failed
 Error: unexpected error

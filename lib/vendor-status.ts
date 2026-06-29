@@ -97,28 +97,41 @@ export function detectVendors(pipelineName: string, failureType: string): string
   const name = pipelineName.toLowerCase();
   const vendors: string[] = [];
 
-  // Orchestrator — always relevant if using Dagster
-  if (name.includes('dagster') || name.includes('etl') || name.includes('pipeline')) vendors.push('dagster');
+  // Orchestrators
+  if (name.includes('dagster')) vendors.push('dagster');
+  if (name.includes('airflow') || name.includes('astronomer')) vendors.push('airflow');
+  if (name.includes('prefect')) vendors.push('prefect');
+
+  // Ingestion tools
   if (name.includes('fivetran')) vendors.push('fivetran');
-  if (name.includes('snowflake')) vendors.push('snowflake');
-  if (name.includes('dbt')) vendors.push('dbt');
+  if (name.includes('airbyte')) vendors.push('airbyte');
+  if (name.includes('stitch')) vendors.push('stitch');
+  if (name.includes('dlt') || name.includes('data_load')) vendors.push('fivetran'); // dlt doesn't have a status page, check source
+
+  // Transformation
+  if (name.includes('dbt') || name.includes('sqlmesh')) vendors.push('dbt');
   if (name.includes('databricks')) vendors.push('databricks');
-  // Shopify status IS useful (API rate limits kill Fivetran syncs) but Shopify MCP is merchant-facing
+  if (name.includes('snowflake') || name.includes('_task') || name.includes('_proc')) vendors.push('snowflake');
+
+  // Source APIs that Fivetran/Airbyte/dlt pull from
   if (name.includes('shopify') || name.includes('orders')) vendors.push('shopify');
   if (name.includes('salesforce') || name.includes('sfdc') || name.includes('crm')) vendors.push('salesforce');
   if (name.includes('stripe') || name.includes('payment')) vendors.push('stripe');
   if (name.includes('github')) vendors.push('github');
-  if (name.includes('airflow') || name.includes('astronomer')) vendors.push('airflow');
 
-  // Infer primary vendor from failure type when no explicit vendor found
-  if (failureType === 'upstream_data_missing' && vendors.length === 0) {
-    vendors.push('fivetran');
-  }
-  if (failureType === 'resource_exhaustion' && vendors.length === 0) {
-    vendors.push('snowflake');
+  // Reverse ETL consumers — relevant if downstream is failing
+  if (name.includes('census') || name.includes('hightouch')) vendors.push('fivetran'); // check source data
+
+  // Generic pipeline/etl keywords — check the most common culprits
+  if (vendors.length === 0 && (name.includes('etl') || name.includes('pipeline') || name.includes('sync'))) {
+    vendors.push('dagster');
   }
 
-  return [...new Set(vendors)].slice(0, 3);
+  // Infer from failure type when no vendor found
+  if (failureType === 'upstream_data_missing' && vendors.length === 0) vendors.push('fivetran');
+  if (failureType === 'resource_exhaustion' && vendors.length === 0) vendors.push('snowflake');
+
+  return [...new Set(vendors)].slice(0, 4);
 }
 
 function normalizeIndicator(indicator?: string): VendorStatusLevel {
@@ -129,8 +142,22 @@ function normalizeIndicator(indicator?: string): VendorStatusLevel {
   return 'unknown';
 }
 
+// ---------------------------------------------------------------------------
+// Module-level cache — survives across requests in the same container instance.
+// StatusPage.io APIs are ~800ms each; status rarely changes within 5 minutes.
+// TTL: 5 minutes. Keyed by vendor name.
+// ---------------------------------------------------------------------------
+const STATUS_CACHE = new Map<string, { result: VendorStatus; expiresAt: number }>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 export async function checkVendorStatus(vendor: string): Promise<VendorStatus> {
-  const config = VENDOR_STATUS_URLS[vendor.toLowerCase()];
+  const cacheKey = vendor.toLowerCase();
+  const cached = STATUS_CACHE.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { ...cached.result, checkedAt: new Date().toISOString() + ' (cached)' };
+  }
+
+  const config = VENDOR_STATUS_URLS[cacheKey];
   const checkedAt = new Date().toISOString();
 
   if (!config) {
@@ -181,7 +208,7 @@ export async function checkVendorStatus(vendor: string): Promise<VendorStatus> {
         startedAt: inc.created_at ?? checkedAt,
       }));
 
-    return {
+    const result: VendorStatus = {
       vendor,
       indicator,
       description,
@@ -190,6 +217,9 @@ export async function checkVendorStatus(vendor: string): Promise<VendorStatus> {
       checkedAt,
       activeIncidents,
     };
+    // Cache successful responses. Don't cache errors — retry those immediately.
+    STATUS_CACHE.set(cacheKey, { result, expiresAt: Date.now() + CACHE_TTL_MS });
+    return result;
   } catch (err) {
     // Don't fail the triage if a status page is unreachable
     return {

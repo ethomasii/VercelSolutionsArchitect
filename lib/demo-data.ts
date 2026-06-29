@@ -148,3 +148,106 @@ export function getSyntheticSnowflakeContention(
   }
   return [];
 }
+
+// ---------------------------------------------------------------------------
+// Synthetic Databricks context
+// Provides realistic Databricks job/cluster data for triage when no
+// Databricks token is configured. Real: lib/integrations/databricks.ts.
+// ---------------------------------------------------------------------------
+export interface SyntheticDatabricksJob {
+  jobId: string;
+  jobName: string;
+  runId: string;
+  clusterType: 'job_cluster' | 'existing_cluster';
+  clusterSpec: string;
+  startTime: string;
+  durationSeconds: number;
+  terminationCode: string;
+  errorMessage: string;
+  notebookPath?: string;
+  sparkVersion: string;
+  nodeType: string;
+  numWorkers: number;
+  spotPreempted: boolean;
+  oomKilled: boolean;
+  unityLineage?: { upstreamTables: string[]; downstreamTables: string[] };
+}
+
+export function getSyntheticDatabricksJob(pipelineName: string, errorHint?: string): SyntheticDatabricksJob | null {
+  const name = pipelineName.toLowerCase();
+  const isOOM = errorHint?.toLowerCase().includes('oom') || errorHint?.toLowerCase().includes('memory') || name.includes('ml') || name.includes('train');
+  const isSpot = errorHint?.toLowerCase().includes('spot') || errorHint?.toLowerCase().includes('preempt');
+  const isTimeout = name.includes('etl') || name.includes('batch');
+
+  if (!name.includes('databricks') && !name.includes('spark') && !name.includes('ml') && !errorHint?.includes('Databricks')) {
+    return null;
+  }
+
+  const now = new Date();
+  if (isOOM) {
+    return {
+      jobId: 'demo-job-411',
+      jobName: `${pipelineName}_training_job`,
+      runId: 'demo-run-77182',
+      clusterType: 'job_cluster',
+      clusterSpec: 'Standard_DS3_v2 × 4 workers',
+      startTime: new Date(now.getTime() - 3600000).toISOString(),
+      durationSeconds: 3240,
+      terminationCode: 'CLUSTER_ERROR',
+      errorMessage: 'com.databricks.backend.daemon.driver.DriverClient$DriverDied: Driver killed due to memory pressure. Consider upgrading to a memory-optimized instance (Standard_E8s_v3) or reducing batch size.',
+      notebookPath: '/Repos/ml-platform/feature_engineering/customer_ltv_features',
+      sparkVersion: '14.3.x-scala2.12',
+      nodeType: 'Standard_DS3_v2',
+      numWorkers: 4,
+      spotPreempted: false,
+      oomKilled: true,
+      unityLineage: {
+        upstreamTables: ['hive_metastore.raw.customer_events', 'main.analytics.fct_orders'],
+        downstreamTables: ['main.ml_features.customer_ltv_v2'],
+      },
+    };
+  } else if (isSpot) {
+    return {
+      jobId: 'demo-job-388',
+      jobName: `${pipelineName}_etl_job`,
+      runId: 'demo-run-55901',
+      clusterType: 'job_cluster',
+      clusterSpec: 'Spot: Standard_DS4_v2 × 8 workers',
+      startTime: new Date(now.getTime() - 7200000).toISOString(),
+      durationSeconds: 1820,
+      terminationCode: 'CLOUD_PROVIDER_SHUTDOWN',
+      errorMessage: 'Cluster terminated by cloud provider (spot preemption). The cluster was using spot instances which can be reclaimed at any time. Use on-demand instances for production jobs or configure automatic retry on spot preemption.',
+      notebookPath: '/Repos/data-eng/pipelines/nightly_etl',
+      sparkVersion: '14.3.x-scala2.12',
+      nodeType: 'Standard_DS4_v2',
+      numWorkers: 8,
+      spotPreempted: true,
+      oomKilled: false,
+    };
+  } else {
+    return {
+      jobId: 'demo-job-502',
+      jobName: `${pipelineName}_notebook_job`,
+      runId: 'demo-run-81234',
+      clusterType: 'existing_cluster',
+      clusterSpec: 'Shared compute cluster (data-eng-prod)',
+      startTime: new Date(now.getTime() - 5400000).toISOString(),
+      durationSeconds: isTimeout ? 5400 : 920,
+      terminationCode: isTimeout ? 'TIMEOUT' : 'RUN_EXECUTION_ERROR',
+      errorMessage: isTimeout
+        ? 'Job run exceeded maximum duration of 90 minutes. The job was processing 3.2GB of unpartitioned data — add date partition pruning to reduce scan size.'
+        : 'PySpark: AnalysisException: Column not found: customer_tier. Schema changed in upstream table main.raw.customers (migration 2026-06-27).',
+      notebookPath: '/Repos/data-eng/pipelines/revenue_aggregation',
+      sparkVersion: '14.3.x-scala2.12',
+      nodeType: 'Standard_DS3_v2',
+      numWorkers: 4,
+      spotPreempted: false,
+      oomKilled: false,
+      unityLineage: {
+        upstreamTables: ['main.raw.customers', 'main.raw.orders', 'main.staging.payments'],
+        downstreamTables: ['main.analytics.mart_revenue', 'main.reporting.revenue_dashboard'],
+      },
+    };
+  }
+}
+

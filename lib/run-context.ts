@@ -3,9 +3,10 @@
 // Today: returns simulated run contexts demonstrating key failure patterns.
 // Production upgrade: replace each case with real API calls.
 
-import { getRunStatus, getRunLogs, getUpstreamContext, getStepFailureDetails } from './integrations/dagster';
+import { getRunStatus, getRunLogs, getUpstreamContext, getStepFailureDetails, getDownstreamAssets } from './integrations/dagster';
 import { getWorkflowRun } from './integrations/github-actions';
 import { getSetting } from './settings';
+import { getSyntheticSnowflakeContention } from './demo-data';
 export { SAMPLE_RUN_IDS } from './run-context-samples';
 
 export interface RunContext {
@@ -135,9 +136,26 @@ Please paste the error log manually, or configure Dagster credentials in /settin
     .map(e => `  ${e.eventType}${e.stepKey ? ` [${e.stepKey}]` : ''}: ${e.message}`)
     .join('\n') || '  See Dagster UI → Runs → ' + runId + ' → ' + failedStepKey + ' → Logs tab for full Python traceback.';
 
-  const enrichedPrompt = `Triage pipeline failure for Dagster run: ${runId}
+  // Extract downstream impact from log events — no extra API call needed
+  // "Dependencies for step X failed" tells us exactly what cascades
+  const logLines = logs.events.map(e => e.message ?? '').filter(Boolean);
+  const downstreamFromLogs = await getDownstreamAssets(
+    failedStepKey.split('.'),
+    logLines,
+  );
+  const downstreamImpact = downstreamFromLogs.length > 0
+    ? downstreamFromLogs.map(d => `  • ${d.assetKey.join('.')} → ${d.status} [from ${d.source}]`)
+    : logs.events
+      .filter(e => e.message?.includes('Dependencies for step') || e.eventType === 'ASSET_FAILED_TO_MATERIALIZE')
+      .map(e => {
+        if (e.eventType === 'ASSET_FAILED_TO_MATERIALIZE') return `  • ${e.message}`;
+        const match = e.message?.match(/step (\S+) failed.*\['([^']+)'\]/);
+        return match ? `  • ${match[1]} → NOT EXECUTED (depends on ${failedStepKey})` : `  • ${e.message?.slice(0, 100)}`;
+      })
+      .filter(Boolean)
+      .slice(0, 5);
 
-ORCHESTRATOR CONTEXT (${run.source === 'live' ? 'live from data-eng-prod' : 'Dagster'} via MCP):
+  const enrichedPrompt = `ORCHESTRATOR CONTEXT (${run.source === 'live' ? 'live from data-eng-prod' : 'Dagster'} via MCP):
 - Job: ${run.jobName ?? 'unknown'} | Status: FAILURE
 - Failed step: ${failedStepKey}
 - Failure type: ${run.failureDescription ?? 'STEP_FAILURE'} (exhausted all retries — not transient)
@@ -149,10 +167,8 @@ FAILURE (from Dagster GraphQL — this IS the actual error):
 ${realError ? `  Python exception: ${realError}` : stepFailureMessage}
 ${keyLogMessages.length > 0 ? `\nLAST LOG MESSAGES:\n${keyLogMessages.map(m => `  ${m}`).join('\n')}` : ''}
 
-DIAGNOSIS NOTE: "RetryRequestedFromPolicy" means the step's retry policy was exhausted.
-The actual root cause is in the LAST LOG MESSAGES above — the PickledObjectFilesystemIOManager
-failed to load the input for the step. This is a storage/IO issue, NOT an API timeout.
-The batch size increase (PR in git context) changed chunk boundaries, likely affecting chunk [9].
+DOWNSTREAM IMPACT (what cascades if this step isn't fixed):
+${downstreamImpact.length > 0 ? downstreamImpact.join('\n') : '  No downstream cascade detected from logs'}
 
 WHAT THE CODE DOES (${failedStepKey}):
 ${codeSnippet || `Step calls an external API in a loop. The failure is in loading INPUT data, not the API call.`}
@@ -397,19 +413,14 @@ DAG TASK DEPENDENCIES:
     ├── run_fivetran_syncs          SUCCEEDED (02:45 UTC)
     └── run_dbt_revenue_models      FAILED    (04:30 UTC)  ← this task
 
-SNOWFLAKE WAREHOUSE CONTENTION:
-  Snowflake query history for COMPUTE_WH_L during 02:00-04:00 UTC:
-  ┌─────────────────────────────────────────────────────────────────────┐
-  │  customer_ltv_batch_job (nightly ETL, separate team):               │
-  │    Warehouse: COMPUTE_WH_L  ← SAME WAREHOUSE as dbt revenue models! │
-  │    Query: INSERT INTO ANALYTICS.LTV.CUSTOMER_SCORES ...              │
-  │    Duration: 3h 12min, scanning 2.1 billion rows                     │
-  │    Status: RUNNING (was already running when dbt started at 03:00)   │
-  └─────────────────────────────────────────────────────────────────────┘
-  
-  Both jobs share COMPUTE_WH_L. Snowflake credits were fully consumed
-  by the LTV batch — dbt queries queued and eventually timed out.
-  No Snowflake platform error — this is a RESOURCE CONTENTION issue.
+SNOWFLAKE WAREHOUSE CONTENTION (from ACCOUNT_USAGE.QUERY_HISTORY):
+${(() => {
+  const contention = getSyntheticSnowflakeContention('COMPUTE_WH_L', failedAt);
+  if (contention.length === 0) return '  No contention data available';
+  return contention.map(q => 
+    `  ${q.user} | ${q.warehouseName} | Duration: ${Math.round(q.durationSeconds/60)}min | Credits: ${q.creditsUsed}\n  Query: ${q.queryText.slice(0, 80)}...`
+  ).join('\n\n') + '\n\n  Both jobs share COMPUTE_WH_L → resource contention caused timeout.';
+})()}
 
 FAILURE LOG (from Airflow task logs):
   [2026-06-28 04:28:14] INFO - Running dbt model revenue_mart
@@ -611,7 +622,7 @@ CROSS-TOOL CONTEXT:
   - PROD.REVENUE.FCT_REVENUE has not been updated for 6 hours (freshness SLA: 4h)
   - 3 downstream BI dashboards are now stale
 
-PIECING TOGETHER LINEAGE (no OpenLineage, using manual mapping):
+PIECING TOGETHER LINEAGE (inferred from dbt sources.yml + naming conventions + incident co-failures):
   Snowflake PROD.REVENUE.FCT_REVENUE
     ← LoadToSnowflake (Step Functions, this state machine)
        ← TransformWithGlue (Glue job: revenue-transform-job)

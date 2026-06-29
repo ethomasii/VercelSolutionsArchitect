@@ -45,8 +45,115 @@ function MarkdownReport({ text }: { text: string }) {
 }
 
 // -------------------------------------------------------------------
-// Tool step detail renderers
+// Visual Lineage Chain
 // -------------------------------------------------------------------
+type LineageNode = { id: string; tool?: string; layer?: string; isBreakPoint?: boolean; inferenceMethod?: string[] };
+type LineageChain = {
+  focusNode: string;
+  upstream: LineageNode[];
+  downstream: LineageNode[];
+  source: string;
+  confidence: string;
+};
+
+const TOOL_COLORS: Record<string, string> = {
+  fivetran: 'border-blue-500/40 bg-blue-950/20 text-blue-300',
+  airbyte: 'border-cyan-500/40 bg-cyan-950/20 text-cyan-300',
+  dlt: 'border-violet-500/40 bg-violet-950/20 text-violet-300',
+  snowpipe: 'border-sky-500/40 bg-sky-950/20 text-sky-300',
+  snowflake_task: 'border-sky-500/40 bg-sky-950/20 text-sky-300',
+  dbt_model: 'border-orange-500/40 bg-orange-950/20 text-orange-300',
+  dagster_asset: 'border-purple-500/40 bg-purple-950/20 text-purple-300',
+  airflow_dag: 'border-teal-500/40 bg-teal-950/20 text-teal-300',
+  fivetran_connector: 'border-blue-500/40 bg-blue-950/20 text-blue-300',
+  unknown: 'border-zinc-700/40 bg-zinc-900/40 text-zinc-400',
+};
+const TOOL_ICONS: Record<string, string> = {
+  fivetran: '🔌', airbyte: '🔌', dlt: '🐍', stitch: '🔌', snowpipe: '❄️',
+  snowflake_task: '❄️', dynamic_table: '❄️', dbt_model: '🔄', dagster_asset: '🔷',
+  airflow_dag: '🌬️', fivetran_connector: '🔌', unknown: '◻️',
+};
+const LAYER_LABEL: Record<string, string> = {
+  source: 'source', raw: 'raw', staging: 'staging',
+  intermediate: 'intermediate', mart: 'mart', unknown: '',
+};
+
+function LineageChainDisplay({ chain, breakNodeId }: { chain: LineageChain; breakNodeId?: string }) {
+  // Build the left-to-right chain: upstream (reversed) → focus node → downstream
+  const allNodes: Array<LineageNode & { role: 'upstream' | 'focus' | 'downstream' }> = [
+    ...[...chain.upstream].reverse().map(n => ({ ...n, role: 'upstream' as const })),
+    { id: chain.focusNode, tool: 'unknown', layer: 'unknown', role: 'focus' as const },
+    ...chain.downstream.map(n => ({ ...n, role: 'downstream' as const })),
+  ];
+
+  if (allNodes.length <= 1) return null;
+
+  const sourceLabel = chain.source === 'dbt_manifest' ? '✓ dbt manifest'
+    : chain.source === 'datahub' ? '✓ Datahub'
+    : chain.source === 'cached' ? '~ cached'
+    : `~ inferred (${chain.confidence})`;
+
+  return (
+    <div className="mb-4 rounded-xl border border-zinc-800 bg-zinc-900/30 overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-zinc-800/50">
+        <span className="text-xs font-semibold text-zinc-300">🔗 Lineage Chain</span>
+        <span className="text-xs text-zinc-600">{sourceLabel}</span>
+      </div>
+      <div className="px-4 py-3 overflow-x-auto">
+        <div className="flex items-center gap-0 min-w-max">
+          {allNodes.map((node, i) => {
+            const isFocus = node.role === 'focus';
+            const isBreak = node.id === breakNodeId || node.isBreakPoint;
+            const isUpstream = node.role === 'upstream';
+            const colorClass = isFocus
+              ? isBreak
+                ? 'border-red-500/50 bg-red-950/20 text-red-300'
+                : 'border-orange-500/50 bg-orange-950/20 text-orange-300'
+              : isUpstream && isBreak
+              ? 'border-red-500/50 bg-red-950/20 text-red-300'
+              : TOOL_COLORS[node.tool ?? 'unknown'] ?? TOOL_COLORS.unknown;
+            const icon = TOOL_ICONS[node.tool ?? 'unknown'] ?? '◻️';
+            const layerLabel = LAYER_LABEL[node.layer ?? 'unknown'];
+            const shortId = node.id.length > 22 ? node.id.slice(0, 19) + '…' : node.id;
+
+            return (
+              <div key={i} className="flex items-center">
+                {/* Node box */}
+                <div className={`rounded-lg border px-2.5 py-1.5 ${colorClass} ${isFocus ? 'ring-1 ring-offset-1 ring-offset-zinc-900 ring-orange-500/30' : ''}`}>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs">{icon}</span>
+                    <div>
+                      <p className="text-xs font-mono font-medium leading-tight">{shortId}</p>
+                      {layerLabel && (
+                        <p className="text-xs opacity-60 leading-tight">{layerLabel}</p>
+                      )}
+                    </div>
+                    {isBreak && <span className="text-xs text-red-400 font-bold ml-0.5">✗</span>}
+                    {isFocus && !isBreak && <span className="text-xs text-orange-400 ml-0.5">←</span>}
+                  </div>
+                </div>
+                {/* Arrow between nodes */}
+                {i < allNodes.length - 1 && (
+                  <div className="flex items-center px-1">
+                    <span className="text-zinc-600 text-xs">→</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {chain.upstream.length > 0 && (
+          <p className="text-xs text-zinc-700 mt-2">
+            {chain.upstream[0]?.tool && chain.upstream[0].tool !== 'unknown'
+              ? `Root: ${chain.upstream[chain.upstream.length - 1]?.id} → … → ${chain.focusNode} (failing)`
+              : `Check upstream nodes — the break may be before ${chain.focusNode}`}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 type ClassifyOutput = {
   failureType?: string; confidence?: number;
   affectedPipeline?: string; keySignals?: string[]; reasoning?: string;
@@ -62,6 +169,8 @@ type IncidentOutput = {
   recentIncidents?: Array<{ pipeline_name?: string; occurred_at?: string; resolved_at?: string; resolution_summary?: string; root_cause?: string; resolved_by?: string }>;
   mostCommonResolution?: string;
   recentUpstreamFailures?: Array<{ pipelineName?: string; failureType?: string; occurredAt?: string; resolutionSummary?: string }>;
+  lineageChain?: LineageChain;
+  materializationOwner?: string;
 };
 
 type GitOutput = {
@@ -142,6 +251,17 @@ function ToolDetail({ toolName, output }: { toolName: string; output: unknown })
     const o = output as IncidentOutput;
     return (
       <div className="space-y-3">
+        {/* Lineage chain — visual graph */}
+        {o.lineageChain && <LineageChainDisplay chain={o.lineageChain} />}
+
+        {/* Materialization owner */}
+        {o.materializationOwner && (
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2">
+            <p className="text-xs text-zinc-500 mb-1 font-medium">Materialization owner</p>
+            <pre className="text-xs font-mono text-zinc-400 whitespace-pre-wrap">{o.materializationOwner}</pre>
+          </div>
+        )}
+
         {/* Summary stats */}
         <div className="flex items-center gap-4">
           <div className="text-center">
@@ -828,6 +948,10 @@ function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportTex
   const classifyPart = toolParts.find(p => p.type === 'tool-classifyFailure');
   const pipelineName = (classifyPart?.input as { affectedPipeline?: string } | undefined)?.affectedPipeline;
 
+  // Extract lineage chain from lookupIncidentHistory for top-level display
+  const incidentPart2 = toolParts.find(p => p.type === 'tool-lookupIncidentHistory');
+  const lineageChain = (incidentPart2?.output as IncidentOutput | undefined)?.lineageChain;
+
   return (
     <div>
       {toolParts.length > 0 && (
@@ -843,6 +967,10 @@ function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportTex
             <p className="text-xs text-zinc-700 px-1">Generating report...</p>
           )}
         </div>
+      )}
+      {/* Lineage chain — shown prominently above report once available */}
+      {lineageChain && lineageChain.upstream.length > 0 && (
+        <LineageChainDisplay chain={lineageChain} />
       )}
       {fullText && <MarkdownReport text={fullText} />}
       {proposedActions.length > 0 && (

@@ -397,3 +397,74 @@ export async function getAssetHealth(
     return { status: 'unknown', lastMaterialized: null, source: 'unavailable' };
   }
 }
+
+// Traverse the Dagster asset graph to find assets that depend on the failing asset.
+// Uses get_assets (returns all assets) then filters by assetDependencies.
+// Falls back to extracting "Dependencies for step X failed" from run logs if MCP unavailable.
+export async function getDownstreamAssets(
+  failingAssetKey: string[],
+  runLogs?: string[],
+  instanceName = 'default'
+): Promise<{ assetKey: string[]; status: string; willBeBlocked: boolean; source: 'live' | 'logs' | 'unavailable' }[]> {
+  // First try to extract from run logs — Dagster logs explicitly say what got blocked
+  if (runLogs && runLogs.length > 0) {
+    const downstream: { assetKey: string[]; status: string; willBeBlocked: boolean; source: 'logs' }[] = [];
+    const failingStepName = failingAssetKey.join('.');
+    for (const line of runLogs) {
+      // "Dependencies for step enriched_data.concat_chunk_list failed: ['enriched_data.process_chunk[9]']"
+      const depsMatch = line.match(/Dependencies for step (\S+) failed.*\[('[^']+'(?:, '[^']+')*)\]/);
+      if (depsMatch && depsMatch[2].includes(failingStepName.replace(/\[.*\]/, ''))) {
+        downstream.push({
+          assetKey: depsMatch[1].split('.'),
+          status: 'SKIPPED (dependency failed)',
+          willBeBlocked: true,
+          source: 'logs',
+        });
+      }
+      // "Asset ["enriched_data"] failed to materialize"
+      const assetFailed = line.match(/Asset \[\"([^"]+)\"\] failed to materialize/);
+      if (assetFailed && assetFailed[1] !== failingAssetKey.join('/')) {
+        downstream.push({
+          assetKey: assetFailed[1].split('/'),
+          status: 'FAILED TO MATERIALIZE',
+          willBeBlocked: true,
+          source: 'logs',
+        });
+      }
+    }
+    if (downstream.length > 0) return downstream;
+  }
+
+  // Try live Dagster MCP — get_assets returns asset dependency graph
+  const creds = await getCredentials(instanceName);
+  if (!creds) return [];
+
+  try {
+    const data = await callDagsterMCP(creds.token, creds.org, 'get_assets', {
+      deployment_name: creds.deploymentName,
+    }) as {
+      assets?: Array<{
+        assetKey: string[];
+        assetDependencies?: string[][];
+        latestMaterializationTimestamp?: number;
+        latestFailedToMaterializeTimestamp?: number;
+      }>;
+    };
+
+    const assets = data.assets ?? [];
+    const failingKeyStr = failingAssetKey.join('/');
+
+    // Find assets that list the failing asset as a dependency
+    return assets
+      .filter(a => a.assetDependencies?.some(dep => dep.join('/') === failingKeyStr))
+      .map(a => {
+        const lastFail = a.latestFailedToMaterializeTimestamp;
+        const lastSuccess = a.latestMaterializationTimestamp;
+        const status = lastFail && (!lastSuccess || lastFail > lastSuccess) ? 'FAILED' : 'OK';
+        return { assetKey: a.assetKey, status, willBeBlocked: true, source: 'live' as const };
+      });
+  } catch (err) {
+    console.warn('[dagster] getDownstreamAssets failed:', err);
+    return [];
+  }
+}

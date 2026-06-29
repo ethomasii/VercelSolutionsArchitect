@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { sql } from './db';
 import { getRecentChanges, readRepoFile } from './integrations/github';
 import { searchRunbooks as searchConfluence } from './integrations/confluence';
+import { getWarehouseContention } from './integrations/snowflake';
+import { inferLineage, lineageToPromptText, extractTablesFromError, tableRefsToLineageText, detectToolsFromLog, inferOrchestratorDeps, extractExplicitOrchestratorDeps, orchestratorDepsToPromptText } from './lineage';
+import { getCatalogLineage, catalogLineageToText, getMaterializationOwner, ownerToPromptText } from './integrations/datacatalog';
 import { checkVendorStatus, detectVendors } from './vendor-status';
 import { findConnectorsForPipeline, getConnectorStatus } from './integrations/fivetran';
 import { getSyntheticFivetranStatus } from './demo-data';
@@ -26,6 +29,14 @@ Examples:
 - "com.databricks.backend...ClusterAutoTerminatedException" → vendors: ['databricks']
 - "dbt test failures" with upstream Fivetran context in run → vendors: ['fivetran', 'dbt']
 - Generic "unexpected error, exit code 1" → vendors: [] (nothing to extract)
+
+TABLE EXTRACTION — ALWAYS include rawLogText so we can extract table references:
+When a SQL error mentions PROD.RAW.SHOPIFY_ORDERS, we know:
+  - Fivetran owns the RAW schema → likely a silent-failure upstream sync
+  - dbt stg_shopify_orders transforms it → check if that model is broken
+  - fct_orders / mart_revenue depend on it → those will break next
+Table schema names tell us the tool: RAW/FIVETRAN→connector, STG→dbt staging,
+ANALYTICS/MARTS→dbt mart, ML/FEATURES→Databricks, TASKS→Snowflake task.
 
 With an enriched run context (Dagster/Airflow): extract vendors from the full
 dependency graph and CONCURRENT WORKLOAD section, not just the error line.
@@ -60,7 +71,9 @@ Classification guidance for ambiguous cases:
       vendorsDetected: z.array(z.string()).describe(
         'Vendor/product names explicitly found in the log or run context. Empty array if none named.'
       ),
-      // Stack trace extraction — enables file reading and code fix proposals
+      rawLogText: z.string().optional().describe(
+        'The raw error/log text — pass this so we can extract table names for lineage inference. Include the full error message, SQL query, or stack trace.'
+      ),
       stackTrace: z.object({
         filePath: z.string().describe('Exact file path from traceback, e.g. enriched_data/assets.py'),
         lineNumber: z.number().optional().describe('Line number from traceback'),
@@ -74,10 +87,25 @@ Classification guidance for ambiguous cases:
       ),
       reasoning: z.string(),
     }),
-    // Passthrough execute so the multi-step loop can continue with a result.
-    // The model fills this from log analysis; we just echo back the input.
-    // Separating classification from retrieval keeps each tool single-purpose.
-    execute: async (input) => input,
+    execute: async (input) => {
+      // extractTablesFromError and detectToolsFromLog both scan the same text.
+      // Call them in a destructured array to make the single-pass intent explicit.
+      if (!input.rawLogText) return { ...input, tableLineage: null, detectedTools: [], orchestratorDeps: null };
+      const [tableRefs, detectedTools] = [
+        extractTablesFromError(input.rawLogText),
+        detectToolsFromLog(input.rawLogText),
+      ];
+      const tableLineage = tableRefsToLineageText(tableRefs, detectedTools);
+      const isOrchestratorLog = detectedTools.some(t => ['airflow', 'prefect', 'mage', 'kestra'].includes(t.tool))
+        || input.rawLogText.includes('workflow_run') || input.rawLogText.includes('ExternalTaskSensor');
+      const explicitDeps = isOrchestratorLog
+        ? extractExplicitOrchestratorDeps(input.rawLogText, input.affectedPipeline)
+        : [];
+      const orchestratorDeps = explicitDeps.length > 0
+        ? orchestratorDepsToPromptText(input.affectedPipeline, { upstream: [], downstream: [] }, explicitDeps)
+        : null;
+      return { ...input, tableLineage, detectedTools: detectedTools.map(t => t.tool), orchestratorDeps };
+    },
   }),
 
   searchRunbooks: tool({
@@ -191,30 +219,85 @@ Critical for identifying known-flaky pipelines and recurring patterns.`,
     execute: async ({ failureType, pipelineName, lookbackDays }) => {
       const orgId = 'default';
 
-      // Avoid passing undefined as a SQL parameter — Neon's driver may not handle
-      // it correctly. Build two separate queries instead.
-      const rows = pipelineName
-        ? await sql`
-            SELECT pipeline_name, failure_type, occurred_at, resolved_at,
-                   resolution_summary, root_cause, known_flaky, resolved_by
-            FROM incidents
-            WHERE org_id = ${orgId}
-              AND failure_type = ${failureType}
-              AND pipeline_name = ${pipelineName}
-              AND occurred_at > now() - (${lookbackDays} || ' days')::interval
-            ORDER BY occurred_at DESC
-            LIMIT 10
-          `
-        : await sql`
-            SELECT pipeline_name, failure_type, occurred_at, resolved_at,
-                   resolution_summary, root_cause, known_flaky, resolved_by
-            FROM incidents
-            WHERE org_id = ${orgId}
-              AND failure_type = ${failureType}
-              AND occurred_at > now() - (${lookbackDays} || ' days')::interval
-            ORDER BY occurred_at DESC
-            LIMIT 10
-          `;
+      // Run all independent queries in parallel — was sequential, now concurrent.
+      // The two SQL queries, catalog lineage, materialization owner, and upstream failures
+      // have zero dependencies on each other. Parallelizing cuts this tool's latency ~60%.
+      const [rows, recentUpstreamFailures, lineageResult, ownerResult] = await Promise.all([
+        // Primary incident history
+        pipelineName
+          ? sql`
+              SELECT pipeline_name, failure_type, occurred_at, resolved_at,
+                     resolution_summary, root_cause, known_flaky, resolved_by
+              FROM incidents
+              WHERE org_id = ${orgId}
+                AND failure_type = ${failureType}
+                AND pipeline_name = ${pipelineName}
+                AND occurred_at > now() - (${lookbackDays} || ' days')::interval
+              ORDER BY occurred_at DESC
+              LIMIT 10
+            `
+          : sql`
+              SELECT pipeline_name, failure_type, occurred_at, resolved_at,
+                     resolution_summary, root_cause, known_flaky, resolved_by
+              FROM incidents
+              WHERE org_id = ${orgId}
+                AND failure_type = ${failureType}
+                AND occurred_at > now() - (${lookbackDays} || ' days')::interval
+              ORDER BY occurred_at DESC
+              LIMIT 10
+            `,
+        // Cross-pipeline upstream failures (concurrent with above)
+        pipelineName
+          ? sql`
+              SELECT DISTINCT pipeline_name, failure_type, occurred_at, resolution_summary
+              FROM incidents
+              WHERE org_id = ${orgId}
+                AND pipeline_name != ${pipelineName}
+                AND occurred_at > now() - interval '6 hours'
+                AND (resolved_at IS NULL OR resolved_at > now() - interval '4 hours')
+              ORDER BY occurred_at DESC
+              LIMIT 5
+            `
+          : Promise.resolve([]),
+        // Data catalog lineage (concurrent — may hit dbt Cloud API or Datahub)
+        pipelineName
+          ? (async () => {
+              const catalog = await getCatalogLineage(pipelineName);
+              if (catalog && catalog.confidence !== 'none') {
+                return {
+                  text: catalogLineageToText(pipelineName, catalog),
+                  chain: {
+                    focusNode: pipelineName,
+                    upstream: catalog.upstream.map(id => ({ id, tool: 'unknown', layer: 'unknown', isBreakPoint: false })),
+                    downstream: catalog.downstream.map(id => ({ id, tool: 'unknown', layer: 'unknown' })),
+                    source: catalog.source,
+                    confidence: catalog.confidence,
+                  },
+                };
+              }
+              const inferred = await inferLineage(pipelineName);
+              return {
+                text: lineageToPromptText(inferred),
+                chain: {
+                  focusNode: pipelineName,
+                  upstream: inferred.upstreamNodes.map(n => ({
+                    id: n.id, tool: n.tool as string, layer: n.layer,
+                    inferenceMethod: n.inferenceMethod, isBreakPoint: false,
+                  })),
+                  downstream: inferred.downstreamNodes.map(n => ({
+                    id: n.id, tool: n.tool as string, layer: n.layer,
+                  })),
+                  source: 'inferred' as const,
+                  confidence: inferred.confidence,
+                },
+              };
+            })()
+          : Promise.resolve(null),
+        // Materialization owner (concurrent — may hit Datahub)
+        pipelineName
+          ? getMaterializationOwner(pipelineName).then(ownerToPromptText)
+          : Promise.resolve(null),
+      ]);
 
       const knownFlaky = rows.some(r => r.known_flaky);
       const resolvedRows = rows.filter(r => r.resolved_at);
@@ -222,37 +305,15 @@ Critical for identifying known-flaky pipelines and recurring patterns.`,
         resolvedRows.length > 0
           ? Math.round(
               resolvedRows
-                .map(
-                  r =>
-                    (new Date(r.resolved_at).getTime() -
-                      new Date(r.occurred_at).getTime()) /
-                    60000
-                )
+                .map(r => (new Date(r.resolved_at).getTime() - new Date(r.occurred_at).getTime()) / 60000)
                 .reduce((a, b) => a + b, 0) / resolvedRows.length
             )
           : null;
 
-      // The knownFlaky flag is one of the most useful outputs. If a pipeline has
-      // fired 8 times in 90 days and always resolved itself, the recommendation
-      // should be "wait 20 minutes" not "page someone." That's institutional
-      // knowledge no vendor can provide.
-
-      // Cross-pipeline context: find OTHER pipelines that failed in the same window.
-      // This surfaces upstream failures that caused the current failure
-      // (e.g., fivetran_orders_daily failing 30min before dbt_customers_transform).
-      // With Dagster MCP this would traverse the asset dependency graph instead.
-      const recentUpstreamFailures = pipelineName
-        ? await sql`
-            SELECT DISTINCT pipeline_name, failure_type, occurred_at, resolution_summary
-            FROM incidents
-            WHERE org_id = ${orgId}
-              AND pipeline_name != ${pipelineName}
-              AND occurred_at > now() - interval '6 hours'
-              AND (resolved_at IS NULL OR resolved_at > now() - interval '4 hours')
-            ORDER BY occurred_at DESC
-            LIMIT 5
-          `
-        : [];
+      // Orchestrator dep inference is sync — no await needed
+      const orchestratorDeps = pipelineName && /dag|airflow|prefect|flow|workflow|action|pipeline/i.test(pipelineName)
+        ? orchestratorDepsToPromptText(pipelineName, inferOrchestratorDeps(pipelineName))
+        : null;
 
       return {
         totalIncidents: rows.length,
@@ -260,12 +321,16 @@ Critical for identifying known-flaky pipelines and recurring patterns.`,
         avgResolutionMinutes,
         recentIncidents: rows.slice(0, 3),
         mostCommonResolution: rows[0]?.resolution_summary ?? null,
-        recentUpstreamFailures: recentUpstreamFailures.map(r => ({
+        recentUpstreamFailures: (recentUpstreamFailures as typeof rows).map(r => ({
           pipelineName: r.pipeline_name,
           failureType: r.failure_type,
           occurredAt: r.occurred_at,
           resolutionSummary: r.resolution_summary,
         })),
+        lineage: lineageResult?.text ?? null,
+        lineageChain: lineageResult?.chain ?? null,
+        materializationOwner: ownerResult,
+        orchestratorDeps,
       };
     },
   }),
@@ -281,7 +346,13 @@ appropriate GitHub repo instance to show the agent the exact broken code.
 - stackTrace.repoType = 'airflow' → read from 'airflow' instance
 - stackTrace.lineNumber → show ±15 lines around the error
 
-This is what turns a stack trace from a vague hint into an exact line to fix.`,
+ALSO: for Airflow DAGs, Prefect flows, and GitHub Actions workflows — read the DAG/workflow
+file from GitHub to find explicit dependency declarations:
+- Airflow: ExternalTaskSensor(external_dag_id=...) and TriggerDagRunOperator(trigger_dag_id=...)
+- Prefect: run_deployment('flow/deployment', wait_for_completion=True)
+- GitHub Actions: on.workflow_run.workflows: [...] and jobs.*.needs: [...]
+These are explicit edges that don't appear in the orchestrator's UI but are in the code.
+Pass the DAG file path as stackTraceFile when you know it (e.g. dags/02_transform_orders.py).`,
     inputSchema: z.object({
       pipelineName: z.string(),
       failureType: z.string(),
@@ -296,6 +367,7 @@ This is what turns a stack trace from a vague hint into an exact line to fix.`,
 
       // If we have a stack trace file path, read the actual code from the repo
       let codeContext: { path: string; relevantLines: string; lineStart: number } | null = null;
+      let orchestratorDepsFromCode: string | null = null;
       if (stackTraceFile) {
         const instance = repoInstance ?? 'default';
         const fileData = await readRepoFile(stackTraceFile, instance);
@@ -309,12 +381,24 @@ This is what turns a stack trace from a vague hint into an exact line to fix.`,
             .map((l, i) => `${start + i + 1}${start + i + 1 === lineNum ? ' ← ERROR' : '      '}: ${l}`)
             .join('\n');
           codeContext = { path: stackTraceFile, relevantLines, lineStart: start + 1 };
+
+          // Parse the DAG/workflow file for explicit dependency declarations
+          const isOrchestratorFile = /\.(py|yml|yaml)$/.test(stackTraceFile) &&
+            (stackTraceFile.includes('dag') || stackTraceFile.includes('workflow') ||
+             stackTraceFile.includes('flow') || stackTraceFile.includes('.github'));
+          if (isOrchestratorFile) {
+            const explicitDeps = extractExplicitOrchestratorDeps(fileData.content, pipelineName);
+            if (explicitDeps.length > 0) {
+              orchestratorDepsFromCode = orchestratorDepsToPromptText(pipelineName, { upstream: [], downstream: [] }, explicitDeps);
+            }
+          }
         }
       }
 
       return {
         ...gitResult,
         codeContext,
+        orchestratorDepsFromCode,
       };
     },
   }),
@@ -388,6 +472,14 @@ A vendor outage transforms the remediation: "wait for recovery" not "debug code.
         .filter(c => c.note)
         .map(c => c.note as string);
 
+      // Snowflake warehouse contention — check when Snowflake is in the vendor list
+      // and the failure looks like a timeout/resource issue
+      let snowflakeContention: Awaited<ReturnType<typeof getWarehouseContention>> | null = null;
+      if (vendorList.includes('snowflake') && ['resource_exhaustion', 'network_timeout', 'unknown'].includes(failureType)) {
+        const warehouseName = pipelineName.toUpperCase().includes('COMPUTE_WH') ? pipelineName : 'COMPUTE_WH_L';
+        snowflakeContention = await getWarehouseContention(warehouseName, new Date().toISOString());
+      }
+
       return {
         checked: results,
         hasActiveIncidents: incidents.length > 0,
@@ -395,7 +487,10 @@ A vendor outage transforms the remediation: "wait for recovery" not "debug code.
         fivetranConnectors: fivetranConnectors.length > 0 ? fivetranConnectors : undefined,
         hasSilentFivetranFailure: silentFailures.length > 0,
         connectorInsights: connectorNotes,
-        summary: silentFailures.length > 0
+        snowflakeContention: snowflakeContention ?? undefined,
+        summary: snowflakeContention?.hasContention
+          ? `⚠️ WAREHOUSE CONTENTION: ${snowflakeContention.contentionNote}`
+          : silentFailures.length > 0
           ? `⚠️ SILENT FIVETRAN FAILURE: ${fivetranConnectors.find(c => (c.status as { isSilentFailure?: boolean }).isSilentFailure)?.note ?? '0 rows loaded despite SUCCESS status'}`
           : connectorNotes.length > 0
           ? `Connectors: ${connectorNotes.join(' | ')}`
@@ -412,55 +507,68 @@ A vendor outage transforms the remediation: "wait for recovery" not "debug code.
     description: `After completing ALL other tools, propose concrete remediation actions.
 These turn the runbook from text into buttons. Call this LAST.
 
+TOOL-AWARE ACTIONS — the action type depends on what tool materialized the failing asset.
+Use lookupIncidentHistory.lineage and classifyFailure.detectedTools to identify the tool:
+
+DAGSTER: use "rerun_dagster" ONLY if the pipeline ran in Dagster AND you have the runId
+AIRFLOW: use "rerun_airflow" with dagId — triggers POST /api/v1/dags/{id}/dagRuns
+PREFECT: use "rerun_prefect" with deploymentName — triggers prefect deployment run
+GITHUB ACTIONS: use "rerun_github_actions" with workflowId — triggers workflow_dispatch
+LAMBDA/GLUE/APP RUNNER: use "open_dashboard" with AWS Console URL + "create_slack_alert"
+  — these can't self-rerun without more infra; link to the console + notify the team
+DBT (standalone): use "rerun_dbt" with modelName — runs dbt run --select {model}
+SNOWFLAKE TASK: use "open_dashboard" with EXECUTE TASK SQL as the hint
+UNKNOWN/CRON: use "create_slack_alert" + "open_dashboard" — notify team, link to logs
+ANY TOOL with a code regression: use "create_pr" — reads GitHub file, proposes fix
+
 CRITICAL: Distinguish root cause from immediate failure:
-- If lookupIncidentHistory found upstream failures (recentUpstreamFailures), the ROOT CAUSE
-  is upstream — do NOT propose a code fix for the downstream symptom.
-  Instead: propose actions to fix the upstream issue (Fivetran sync, Dagster rerun).
-  Include a rootCauseNote explaining why a code fix would be wrong here.
-  
-- If searchGitContext found a likely-cause PR AND no upstream failures: the code change
-  IS the root cause. Propose create_pr with the specific fix.
+- If lookupIncidentHistory found upstream failures (recentUpstreamFailures), ROOT CAUSE
+  is upstream — fix that first, don't propose a code fix for the downstream symptom.
+- If searchGitContext found a likely-cause PR AND no upstream failures: code change IS
+  the root cause. Propose create_pr with the specific fix.
+- If BOTH upstream AND code issues: fix upstream first, note code fix is secondary.
 
-- If BOTH upstream AND code issues: propose fixing upstream first, note code fix is secondary.
+PR CREATION — works across ALL tools (dbt SQL, Lambda Python, Airflow DAG, workflow YAML):
+- dbt model broke: PR to models/staging/{model}.sql or models/marts/{model}.sql
+- Lambda broke: PR to lambdas/{function}/handler.py
+- Airflow DAG broke: PR to dags/{dag_id}.py
+- GitHub Actions broke: PR to .github/workflows/{workflow}.yml
+- Plain Python script: PR to scripts/{script}.py
+The searchGitContext tool already read the file — use that exact path.
 
-Always include:
-- rootCauseNote: one sentence explaining what actually caused this failure
-  (e.g., "Fivetran loaded 0 rows 2h before dbt ran — fixing dbt code won't help until data arrives")
-- Whether actions address root cause or just restart the symptom
-
-Action types:
-- "rerun_dagster": ONLY if the pipeline explicitly ran in Dagster AND you have the runId from the logs
-  For Airflow → do NOT use rerun_dagster, use open_dashboard with the Airflow run URL
-  For Prefect → do NOT use rerun_dagster, use open_dashboard with the Prefect flow run URL
-  For Step Functions / cron / GitHub Actions → use open_dashboard or create_slack_alert instead
-- "trigger_fivetran_sync": upstream_data_missing + Fivetran identified as source
-- "create_pr": code regression or schema_mismatch where exact file + change is known
-- "open_dashboard": link to the relevant tool (Dagster UI, GitHub PR, Airflow DAG, vendor status page)
-  Use this for any orchestrator that isn't Dagster, or when no run ID is available
-- "create_jira_ticket": any High confidence failure worth tracking  
-- "create_slack_alert": always useful to notify the team
-- "mark_resolved": when pattern is "wait and it resolves"
-
-NEVER use "custom" as an action id. NEVER assume the orchestrator is Dagster unless explicitly stated.
-For Airflow, Prefect, Step Functions, or cron pipelines: use open_dashboard with the correct URL.`,
+Always include rootCauseNote explaining what actually caused the failure.
+NEVER use "custom" as an action id. NEVER assume orchestrator is Dagster without evidence.`,
     inputSchema: z.object({
       failureType: z.string(),
       affectedPipeline: z.string(),
       confidence: z.enum(['High', 'Medium', 'Low']),
+      materializationTool: z.enum([
+        'dagster', 'airflow', 'prefect', 'github_actions', 'dbt_core', 'dbt_cloud',
+        'lambda', 'glue', 'step_functions', 'app_runner', 'ecs',
+        'snowflake_task', 'snowpipe', 'databricks', 'lakeflow',
+        'cron', 'python_script', 'unknown',
+      ]).describe('Which tool materializes this asset — drives which action buttons appear'),
       actions: z.array(z.object({
-        id: z.enum(['rerun_dagster', 'trigger_fivetran_sync', 'create_jira_ticket', 'create_slack_alert', 'mark_resolved', 'open_dashboard', 'create_pr', 'custom']),        label: z.string().describe('Short button label, e.g. "Trigger Fivetran re-sync"'),
+        id: z.enum([
+          'rerun_dagster', 'rerun_airflow', 'rerun_prefect', 'rerun_github_actions',
+          'rerun_dbt', 'trigger_fivetran_sync', 'trigger_airbyte_sync',
+          'create_pr', 'open_dashboard',
+          'create_jira_ticket', 'create_slack_alert', 'mark_resolved',
+        ]),
+        label: z.string().describe('Short button label, e.g. "Trigger Airflow DAG rerun"'),
         description: z.string().describe('One sentence: what this does and why'),
         risk: z.enum(['none', 'low', 'medium']),
-        actionConfidence: z.enum(['High', 'Medium', 'Low']).describe('How confident you are this fixes the issue'),
+        actionConfidence: z.enum(['High', 'Medium', 'Low']),
         requiresApproval: z.boolean(),
-        params: z.record(z.string(), z.string()).optional().describe('Specific params from the log: connector IDs, run IDs, pipeline names'),
-      })).max(4),
-      reasoning: z.string().describe('Why these specific actions, in order of priority'),
+        params: z.record(z.string(), z.string()).optional().describe(
+          'Tool-specific params: dagId, deploymentName, workflowId, modelName, functionName, connectorId, filePath, branchName'
+        ),
+      })).max(5),
+      reasoning: z.string(),
       rootCauseNote: z.string().describe(
-        'One sentence: what actually caused this failure and whether the proposed actions address the root cause or just the symptom. E.g. "Fivetran loaded 0 rows 2h before dbt ran — fixing dbt code would not help; trigger Fivetran sync first."'
+        'One sentence: what actually caused this and whether actions address root cause or symptom.'
       ),
     }),
-    // Passthrough — model proposes actions, UI renders them as buttons, /api/remediate executes
     execute: async (input) => input,
   }),
 };

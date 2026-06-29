@@ -294,11 +294,128 @@ export async function POST(req: Request) {
 
     case 'open_dashboard':
     case 'custom': {
-      // custom/open_dashboard: informational action — return the URL or description
       const url = params.url;
       const description = params.description;
       if (url) return Response.json({ ok: true, url, message: 'Open this URL in your browser' });
       return Response.json({ ok: true, message: description ?? 'See description for manual steps' });
+    }
+
+    case 'rerun_airflow': {
+      const host = await getSetting('airflow', 'AIRFLOW_HOST');
+      const username = await getSetting('airflow', 'AIRFLOW_USERNAME');
+      const password = await getSetting('airflow', 'AIRFLOW_PASSWORD');
+      const dagId = params.dagId;
+      if (!host || !username || !password) {
+        return Response.json({ ok: false, error: 'Airflow credentials not configured', setup: 'Go to /settings → Airflow' }, { status: 400 });
+      }
+      if (!dagId) return Response.json({ ok: false, error: 'dagId required' }, { status: 400 });
+      try {
+        const creds = Buffer.from(`${username}:${password}`).toString('base64');
+        const resp = await fetch(`${host.replace(/\/$/, '')}/api/v1/dags/${dagId}/dagRuns`, {
+          method: 'POST',
+          headers: { 'Authorization': `Basic ${creds}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dag_run_id: `dispatch-rerun-${Date.now()}`, note: 'Triggered by Dispatch triage' }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!resp.ok) return Response.json({ ok: false, error: `Airflow API ${resp.status}` });
+        const data = await resp.json() as { dag_run_id?: string; state?: string };
+        return Response.json({ ok: true, message: `Airflow DAG run triggered: ${data.dag_run_id}`, state: data.state });
+      } catch (err) {
+        return Response.json({ ok: false, error: String(err) }, { status: 500 });
+      }
+    }
+
+    case 'rerun_prefect': {
+      const apiUrl = await getSetting('prefect', 'PREFECT_API_URL');
+      const apiKey = await getSetting('prefect', 'PREFECT_API_KEY');
+      const deploymentName = params.deploymentName;
+      if (!apiUrl) return Response.json({ ok: false, error: 'Prefect API URL not configured', setup: 'Go to /settings → Prefect' }, { status: 400 });
+      if (!deploymentName) return Response.json({ ok: false, error: 'deploymentName required (format: flow-name/deployment-name)' }, { status: 400 });
+      try {
+        const [flowName, depName] = deploymentName.split('/');
+        // Find deployment ID first
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+        const depResp = await fetch(`${apiUrl}/deployments/filter`, {
+          method: 'POST', headers,
+          body: JSON.stringify({ deployments: { name: { any_: [depName ?? flowName] } }, limit: 1 }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const deps = await depResp.json() as Array<{ id: string }>;
+        const depId = deps[0]?.id;
+        if (!depId) return Response.json({ ok: false, error: `Deployment '${deploymentName}' not found` });
+        const runResp = await fetch(`${apiUrl}/deployments/${depId}/create_flow_run`, {
+          method: 'POST', headers, body: JSON.stringify({ name: `dispatch-rerun-${Date.now()}` }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const run = await runResp.json() as { id?: string; state?: { type?: string } };
+        return Response.json({ ok: true, message: `Prefect flow run triggered: ${run.id}`, state: run.state?.type });
+      } catch (err) {
+        return Response.json({ ok: false, error: String(err) }, { status: 500 });
+      }
+    }
+
+    case 'rerun_github_actions': {
+      const token = await getSetting('github', 'GITHUB_TOKEN', 'default');
+      const owner = await getSetting('github', 'GITHUB_REPO_OWNER', 'default');
+      const repo = await getSetting('github', 'GITHUB_REPO_NAME', 'default');
+      const workflowId = params.workflowId;
+      const ref = params.ref ?? 'main';
+      if (!token || !owner || !repo) return Response.json({ ok: false, error: 'GitHub credentials not configured', setup: 'Go to /settings → GitHub' }, { status: 400 });
+      if (!workflowId) return Response.json({ ok: false, error: 'workflowId required (workflow file name or ID)' }, { status: 400 });
+      try {
+        const resp = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflowId}/dispatches`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ref, inputs: { triggered_by: 'dispatch-triage' } }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!resp.ok) return Response.json({ ok: false, error: `GitHub API ${resp.status}` });
+        return Response.json({ ok: true, message: `Workflow '${workflowId}' triggered on ${ref}` });
+      } catch (err) {
+        return Response.json({ ok: false, error: String(err) }, { status: 500 });
+      }
+    }
+
+    case 'rerun_dbt': {
+      const cloudToken = await getSetting('dbt', 'DBT_CLOUD_TOKEN');
+      const accountId = await getSetting('dbt', 'DBT_CLOUD_ACCOUNT_ID');
+      const jobId = params.jobId;
+      if (!cloudToken || !accountId) {
+        return Response.json({ ok: false, error: 'dbt Cloud credentials not configured', setup: 'Go to /settings → dbt', hint: 'For dbt Core, run: dbt run --select ' + (params.modelName ?? 'model_name') }, { status: 400 });
+      }
+      if (!jobId) return Response.json({ ok: false, error: 'jobId required (dbt Cloud job ID)', hint: 'Find it in dbt Cloud → Deploy → Jobs' }, { status: 400 });
+      try {
+        const resp = await fetch(`https://cloud.getdbt.com/api/v2/accounts/${accountId}/jobs/${jobId}/run/`, {
+          method: 'POST',
+          headers: { 'Authorization': `Token ${cloudToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cause: 'Triggered by Dispatch triage', steps_override: params.modelName ? [`dbt run --select ${params.modelName}`] : undefined }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const data = await resp.json() as { data?: { id?: number; href?: string } };
+        return Response.json({ ok: true, message: `dbt Cloud job run triggered`, runId: data.data?.id, url: data.data?.href });
+      } catch (err) {
+        return Response.json({ ok: false, error: String(err) }, { status: 500 });
+      }
+    }
+
+    case 'trigger_airbyte_sync': {
+      const airbyte = await getSetting('airbyte', 'AIRBYTE_API_URL');
+      const airbytToken = await getSetting('airbyte', 'AIRBYTE_API_KEY');
+      const connectionId = params.connectionId;
+      if (!airbyte || !connectionId) return Response.json({ ok: false, error: 'Airbyte credentials or connectionId not configured' }, { status: 400 });
+      try {
+        const resp = await fetch(`${airbyte}/v1/jobs`, {
+          method: 'POST',
+          headers: { ...(airbytToken ? { 'Authorization': `Bearer ${airbytToken}` } : {}), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ connectionId, jobType: 'sync' }),
+          signal: AbortSignal.timeout(8000),
+        });
+        const data = await resp.json() as { jobId?: string };
+        return Response.json({ ok: true, message: `Airbyte sync triggered: ${data.jobId}` });
+      } catch (err) {
+        return Response.json({ ok: false, error: String(err) }, { status: 500 });
+      }
     }
 
     default:
