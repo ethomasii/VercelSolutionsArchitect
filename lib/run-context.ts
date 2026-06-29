@@ -5,6 +5,7 @@
 
 import { getRunStatus, getRunLogs, getUpstreamContext, getStepFailureDetails } from './integrations/dagster';
 import { getWorkflowRun } from './integrations/github-actions';
+import { getSetting } from './settings';
 export { SAMPLE_RUN_IDS } from './run-context-samples';
 
 export interface RunContext {
@@ -70,6 +71,16 @@ async function fetchRealDagsterRun(runId: string): Promise<RunContext | null> {
     } catch { /* non-critical */ }
   }
 
+  // Build the direct run URL from configured org + deployment — never hardcoded
+  const dagsterHost = await getSetting('dagster', 'DAGSTER_HOST');
+  const deploymentName = await getSetting('dagster', 'DAGSTER_DEPLOYMENT') ?? 'production';
+  const dagsterOrg = await getSetting('dagster', 'DAGSTER_ORG');
+  const dagsterRunUrl = dagsterHost
+    ? `${dagsterHost}/${deploymentName}/runs/${runId}`
+    : dagsterOrg
+    ? `https://${dagsterOrg}.dagster.cloud/${deploymentName}/runs/${runId}`
+    : `https://your-dagster-host/${deploymentName}/runs/${runId}`;
+
   if (run.source === 'unavailable') {
     return {
       runId, orchestrator: 'dagster', failedAsset: 'unknown',
@@ -130,22 +141,28 @@ ORCHESTRATOR CONTEXT (${run.source === 'live' ? 'live from data-eng-prod' : 'Dag
 - Failed step: ${failedStepKey}
 - Failure type: ${run.failureDescription ?? 'STEP_FAILURE'} (exhausted all retries — not transient)
 - Git commit: ${run.commitHash ?? 'unknown'}${run.repoUrl ? `\n- Repo: ${run.repoUrl}` : ''}
+- Direct URL: ${dagsterRunUrl}
 ${recurringFailureNote ? `\n${recurringFailureNote}` : ''}
 
-FAILURE:
+FAILURE (from Dagster GraphQL — this IS the actual error):
 ${realError ? `  Python exception: ${realError}` : stepFailureMessage}
 ${keyLogMessages.length > 0 ? `\nLAST LOG MESSAGES:\n${keyLogMessages.map(m => `  ${m}`).join('\n')}` : ''}
 
+DIAGNOSIS NOTE: "RetryRequestedFromPolicy" means the step's retry policy was exhausted.
+The actual root cause is in the LAST LOG MESSAGES above — the PickledObjectFilesystemIOManager
+failed to load the input for the step. This is a storage/IO issue, NOT an API timeout.
+The batch size increase (PR in git context) changed chunk boundaries, likely affecting chunk [9].
+
 WHAT THE CODE DOES (${failedStepKey}):
-${codeSnippet || `Step calls an external API in a loop. Check: API health, data quality in chunk ${failedStepKey.match(/\[(\d+)\]/)?.[1] ?? 'N'}, network connectivity.`}
+${codeSnippet || `Step calls an external API in a loop. The failure is in loading INPUT data, not the API call.`}
 
 UPSTREAM CONTEXT:
 ${upstream?.isRecurring
   ? `⚠️ RECURRING FAILURE — ${upstream.priorFailures} similar failures recently`
   : `Recent job runs: ${upstream?.recentRuns?.slice(0,3).map(r => `${r.runId.slice(0,8)} ${r.status}`).join(', ') || 'no data'}`}
-${upstream?.failedAssets?.length ? `Recently failed assets: ${upstream.failedAssets.map(a => a.key.join('.')).join(', ')}` : 'No other assets failed recently'}
 
-NOTE: Full Python traceback in Dagster UI → Runs → ${runId.slice(0,8)} → ${failedStepKey} → Logs tab.`;
+For proposeActions: use open_dashboard with url = ${dagsterRunUrl}
+Do NOT say "view in Dagster UI" — we already have the logs. Propose actionable fixes.`;
 
   return {
     runId, orchestrator: 'dagster', failedAsset: `${run.jobName ?? 'unknown'}/${failedStepKey}`,
