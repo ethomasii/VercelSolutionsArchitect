@@ -120,7 +120,8 @@ export interface GitResult {
 export async function getRecentChanges(
   pipelineName: string,
   hoursBack: number,
-  orgId: string = 'default'
+  orgId: string = 'default',
+  commitSha?: string
 ): Promise<GitResult> {
   // Try real GitHub API first (works across all configured repo instances)
   const token = await getSetting('github', 'GITHUB_TOKEN', 'default');
@@ -128,7 +129,7 @@ export async function getRecentChanges(
   const repo = await getSetting('github', 'GITHUB_REPO_NAME', 'default');
 
   if (token && owner && repo) {
-    return fetchRealGitContext(pipelineName, hoursBack, token, owner, repo);
+    return fetchRealGitContext(pipelineName, hoursBack, token, owner, repo, commitSha);
   }
 
   // Fall back to simulated data from Neon
@@ -168,9 +169,9 @@ async function fetchRealGitContext(
   hoursBack: number,
   token: string,
   owner: string,
-  repo: string
+  repo: string,
+  commitSha?: string
 ): Promise<GitResult> {
-  const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
   const headers = {
     'Authorization': `Bearer ${token}`,
     'Accept': 'application/vnd.github+json',
@@ -178,8 +179,58 @@ async function fetchRealGitContext(
   };
   const base = `https://api.github.com/repos/${owner}/${repo}`;
 
+  // If we have a specific commit SHA from the orchestrator, look it up directly
+  // This is far more reliable than searching recent PRs by time window
+  if (commitSha) {
+    try {
+      const commitRes = await fetch(`${base}/commits/${commitSha}`, { headers, signal: AbortSignal.timeout(8000) });
+      if (commitRes.ok) {
+        const commitData = await commitRes.json() as {
+          sha?: string;
+          commit?: { message?: string; author?: { name?: string; date?: string } };
+          files?: Array<{ filename: string }>;
+          html_url?: string;
+        };
+
+        const filePaths = (commitData.files ?? []).map(f => f.filename);
+        const message = commitData.commit?.message?.split('\n')[0] ?? '';
+        const author = commitData.commit?.author?.name ?? 'unknown';
+        const committedAt = commitData.commit?.author?.date ?? new Date().toISOString();
+
+        // Read content of relevant changed files (SQL, Python, YAML)
+        const fileSnippets: GitResult['fileSnippets'] = [];
+        for (const filePath of filePaths.filter(f => f.match(/\.(sql|py|yaml|yml)$/)).slice(0, 3)) {
+          const fileData = await readRepoFile(filePath);
+          if (fileData) {
+            fileSnippets.push({
+              path: filePath,
+              content: fileData.content.slice(0, 600) + (fileData.content.length > 600 ? '\n...' : ''),
+              repo: `${owner}/${repo}`,
+            });
+          }
+        }
+
+        return {
+          commits: [{
+            sha: commitSha.slice(0, 7),
+            message,
+            author,
+            files: filePaths,
+            committedAt,
+            isLikelyCause: true, // It's the exact commit from the run — always likely cause
+          }],
+          pullRequests: [],
+          fileSnippets,
+          source: 'github_api',
+        };
+      }
+    } catch (err) {
+      console.warn('[github] fetchRealGitContext commit lookup failed:', err);
+    }
+  }
+
   try {
-    // Search for merged PRs that touched files related to this pipeline
+    const since = new Date(Date.now() - hoursBack * 3600000).toISOString();
     const searchTerms = pipelineName.split('_').filter(w => w.length > 3).join('+');
     const prRes = await fetch(
       `${base}/pulls?state=closed&sort=updated&direction=desc&per_page=10`,

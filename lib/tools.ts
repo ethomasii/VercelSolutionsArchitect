@@ -287,9 +287,10 @@ This is what turns a stack trace from a vague hint into an exact line to fix.`,
       stackTraceFile: z.string().optional().describe('File path from classifyFailure.stackTrace.filePath'),
       stackTraceLine: z.number().optional().describe('Line number from classifyFailure.stackTrace.lineNumber'),
       repoInstance: z.string().optional().describe('GitHub instance name from stackTrace.repoType: dbt, dagster, airflow, etc.'),
+      commitSha: z.string().optional().describe('Exact commit SHA from run metadata — fetches real diff for that commit'),
     }),
-    execute: async ({ pipelineName, hoursBack, stackTraceFile, stackTraceLine, repoInstance }) => {
-      const gitResult = await getRecentChanges(pipelineName, hoursBack);
+    execute: async ({ pipelineName, hoursBack, stackTraceFile, stackTraceLine, repoInstance, commitSha }) => {
+      const gitResult = await getRecentChanges(pipelineName, hoursBack, 'default', commitSha);
 
       // If we have a stack trace file path, read the actual code from the repo
       let codeContext: { path: string; relevantLines: string; lineStart: number } | null = null;
