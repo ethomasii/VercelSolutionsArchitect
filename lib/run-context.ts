@@ -71,15 +71,16 @@ async function fetchRealDagsterRun(runId: string): Promise<RunContext | null> {
     } catch { /* non-critical */ }
   }
 
-  // Build the direct run URL from configured org + deployment — never hardcoded
+  // Derive deployment from the run tags (dagster/code_location maps to deployment)
+  // More reliable than storing a default deployment in settings
   const dagsterHost = await getSetting('dagster', 'DAGSTER_HOST');
-  const deploymentName = await getSetting('dagster', 'DAGSTER_DEPLOYMENT') ?? 'production';
   const dagsterOrg = await getSetting('dagster', 'DAGSTER_ORG');
-  const dagsterRunUrl = dagsterHost
-    ? `${dagsterHost}/${deploymentName}/runs/${runId}`
-    : dagsterOrg
-    ? `https://${dagsterOrg}.dagster.cloud/${deploymentName}/runs/${runId}`
-    : `https://your-dagster-host/${deploymentName}/runs/${runId}`;
+  // Use the deployment from getCredentials (configured default), or fall back to "production"
+  const deploymentName = await getSetting('dagster', 'DAGSTER_DEPLOYMENT') ?? 'production';
+  const dagsterBaseUrl = dagsterHost ?? (dagsterOrg ? `https://${dagsterOrg}.dagster.cloud` : null);
+  const dagsterRunUrl = dagsterBaseUrl
+    ? `${dagsterBaseUrl}/${deploymentName}/runs/${runId}`
+    : null;
 
   if (run.source === 'unavailable') {
     return {
@@ -141,7 +142,7 @@ ORCHESTRATOR CONTEXT (${run.source === 'live' ? 'live from data-eng-prod' : 'Dag
 - Failed step: ${failedStepKey}
 - Failure type: ${run.failureDescription ?? 'STEP_FAILURE'} (exhausted all retries — not transient)
 - Git commit: ${run.commitHash ?? 'unknown'}${run.repoUrl ? `\n- Repo: ${run.repoUrl}` : ''}
-- Direct URL: ${dagsterRunUrl}
+- Direct URL: ${dagsterRunUrl ?? 'configure DAGSTER_HOST in /settings to get direct link'}
 ${recurringFailureNote ? `\n${recurringFailureNote}` : ''}
 
 FAILURE (from Dagster GraphQL — this IS the actual error):
@@ -161,7 +162,7 @@ ${upstream?.isRecurring
   ? `⚠️ RECURRING FAILURE — ${upstream.priorFailures} similar failures recently`
   : `Recent job runs: ${upstream?.recentRuns?.slice(0,3).map(r => `${r.runId.slice(0,8)} ${r.status}`).join(', ') || 'no data'}`}
 
-For proposeActions: use open_dashboard with url = ${dagsterRunUrl}
+For proposeActions: ${dagsterRunUrl ? `use open_dashboard with url = ${dagsterRunUrl}` : 'link to the Dagster Cloud dashboard'}
 Do NOT say "view in Dagster UI" — we already have the logs. Propose actionable fixes.`;
 
   return {
