@@ -60,11 +60,13 @@ export default function IntegrationsPage() {
             ))}
           </div>
           <p className="text-xs text-zinc-700 mt-4 pt-3 border-t border-zinc-800">
-            The practical fix for messy enterprises:{' '}
-            <strong className="text-zinc-500">periodic log export to Neon</strong>.
-            Each orchestrator exports run summaries to the{' '}
-            <code className="font-mono text-zinc-600">incidents</code> table.
-            Dispatch then has unified cross-vendor history regardless of who orchestrates what.
+            <strong className="text-zinc-500">Synthetic demo mode:</strong>{' '}
+            Before adding credentials, Dispatch uses realistic synthetic data per scenario — 
+            Fivetran silent failures, Snowflake warehouse contention, Jira tickets.
+            Every synthetic entry is replaced automatically when real credentials are added in{' '}
+            <a href="/settings" className="text-zinc-500 hover:text-zinc-300 transition">Settings</a>.{' '}
+            <strong className="text-zinc-500">Neon incidents table</strong> is the universal fallback:
+            any orchestrator can POST run summaries to unify history without OpenLineage.
           </p>
         </div>
 
@@ -210,20 +212,20 @@ export default function IntegrationsPage() {
 // Coverage map
 // -------------------------------------------------------------------
 const COVERAGE_ITEMS = [
-  { signal: 'Why did THIS run fail?', coverage: 'full', tool: 'Dagster/Airflow MCP → run logs', desc: 'Full error logs from the current run. The first question every on-call asks.' },
-  { signal: 'Has this failed before? Is it recurring?', coverage: 'full', tool: 'Neon incidents table + Dagster list_runs', desc: 'Prior run history + incident DB. Recurring vs. first-time failure changes the remediation entirely.' },
-  { signal: 'What changed in the code recently?', coverage: 'full', tool: 'GitHub API or git_context table', desc: 'PRs merged in the last 24h. Column rename 4 hours ago is often the smoking gun.' },
-  { signal: 'Is the upstream vendor having an outage?', coverage: 'full', tool: 'StatusPage APIs (real-time)', desc: 'Dagster, Fivetran, Snowflake, dbt, GitHub status pages checked in real-time. If Dagster Cloud is degraded, run visibility is gone before any pipeline alert fires.' },
-  { signal: 'Runbooks for primary + upstream pipelines', coverage: 'full', tool: 'Neon + Confluence/Notion MCP cascade search', desc: 'Cascade search: runbooks for the failing pipeline AND inferred upstream pipelines (Fivetran runbook when dbt fails).' },
-  { signal: 'Open Jira incidents for this pipeline', coverage: 'partial', tool: 'Atlassian Rovo MCP (hosted)', desc: 'Search P1/P2 Jira issues for this pipeline. Same Rovo OAuth session as Confluence.' },
-  { signal: 'What did the upstream Fivetran sync load?', coverage: 'partial', tool: 'Fivetran API (self-hosted MCP)', desc: 'Row counts, sync status, 0-row silent failures. Requires Fivetran credentials + running the MCP locally.' },
-  { signal: 'Which assets depend on the failing one?', coverage: 'partial', tool: 'Dagster asset graph only', desc: 'Downstream impact analysis. Available in Dagster. Other orchestrators: use dbt lineage or OpenLineage.' },
-  { signal: 'What ran upstream in the last 2 hours?', coverage: 'partial', tool: 'Dagster list_runs + asset health check', desc: 'Implemented: checks recently-failed assets in the deployment. Gap: cross-orchestrator (Airflow + Dagster in same stack).' },
-  { signal: 'What caused the failure in GitHub Actions / Step Functions?', coverage: 'gap', tool: '—', desc: 'No MCP yet. GitHub Actions API works; Step Functions requires CloudWatch. Webhook handlers exist in the codebase as stubs.' },
-  { signal: 'Full cross-vendor lineage graph', coverage: 'gap', tool: '—', desc: 'No single tool covers this. Options: OpenLineage/Marquez (emit from all tools), dbt sources.yml (partial), Dagster asset graph (Dagster-only).' },
-  { signal: 'Snowflake query history / warehouse contention', coverage: 'gap', tool: '—', desc: 'SNOWFLAKE.ACCOUNT_USAGE.QUERY_HISTORY is a gold mine for diagnosing resource contention. Requires Snowflake creds.' },
-  { signal: 'Databricks job context / Unity Catalog lineage', coverage: 'gap', tool: '—', desc: 'Databricks Jobs API + Unity Catalog lineage API would provide Databricks-equivalent of Dagster asset graph.' },
-  { signal: 'Legacy cron jobs / no orchestrator', coverage: 'gap', tool: '—', desc: 'The hardest case. Best solution: each cron job POSTs to /api/webhooks/dagster on failure, Dispatch triages. Runbooks fill the context gap.' },
+  { signal: 'Why did THIS run fail?', coverage: 'full', tool: 'Dagster/Airflow MCP → run logs + GraphQL', desc: 'Full error logs via MCP. For Dagster: also queries GraphQL directly for the actual Python exception (not just "STEP_FAILURE"). Direct link to the specific run in the orchestrator UI.' },
+  { signal: 'Has this failed before? Is it recurring?', coverage: 'full', tool: 'Neon incidents table + Dagster list_runs + Vercel Cron sync', desc: 'Prior run history + incident DB. Vercel Cron syncs Dagster failures to Neon every 30 min. Recurring vs. first-time failure changes the remediation entirely.' },
+  { signal: 'What changed in the code recently?', coverage: 'full', tool: 'GitHub API — commit SHA lookup + time-window search', desc: 'When orchestrator provides a commit hash (Dagster tags, GitHub Actions metadata), Dispatch fetches the REAL diff for that exact commit. Falls back to recent PRs by time window.' },
+  { signal: 'Is the upstream vendor having an outage?', coverage: 'full', tool: 'StatusPage APIs (real-time) + Fivetran connector status', desc: '10 vendor status pages checked in real-time. Fivetran connector-level check detects silent 0-row SUCCESS failures. Synthetic demo data tells the right story before credentials are added.' },
+  { signal: 'Runbooks for primary + upstream pipelines', coverage: 'full', tool: 'Neon cascade search + Confluence/Notion MCP', desc: 'Cascade search: runbooks for the failing pipeline AND inferred upstream pipelines. Now includes orchestrator-level runbooks (IO Manager, OOM, API rate limits).' },
+  { signal: 'What did the upstream Fivetran sync load?', coverage: 'full', tool: 'Fivetran API (real) + synthetic silent failure detection', desc: 'Real: getConnectorStatus() + findConnectorsForPipeline() via Fivetran API when credentials set. Synthetic: demo data shows 0-row silent failures before credentials added. Add FIVETRAN_API_KEY in /settings to go live.' },
+  { signal: 'What caused the failure in GitHub Actions / Step Functions?', coverage: 'partial', tool: 'GitHub Actions API + webhook + Step Functions stub', desc: 'GitHub Actions: getWorkflowRun() fetches real job/step details. Webhook at /api/webhooks/github-actions receives failure events. Step Functions: needs CloudWatch integration (AWS SDK stub ready).' },
+  { signal: 'Snowflake query history / warehouse contention', coverage: 'partial', tool: 'Synthetic contention data + Snowflake REST API stub', desc: 'Synthetic: realistic concurrent query data for warehouse contention scenarios (e.g., two jobs sharing COMPUTE_WH). Real: Snowflake REST SQL API stub in lib/integrations/snowflake.ts — add SNOWFLAKE_* in /settings.' },
+  { signal: 'Open Jira incidents for this pipeline', coverage: 'partial', tool: 'Synthetic Jira issues + Atlassian Rovo MCP (hosted)', desc: 'Synthetic: realistic P2/P3 Jira tickets for each scenario. Real: Atlassian Rovo MCP at mcp.atlassian.com — same OAuth as Confluence, covers Jira + Confluence in one connection.' },
+  { signal: 'Which assets depend on the failing one?', coverage: 'partial', tool: 'Dagster asset graph only (via MCP get_assets)', desc: 'Downstream impact analysis via Dagster get_assets with latestFailedToMaterializeTimestamp. Other orchestrators: dbt compile graph (read sources.yml) or OpenLineage if emitting events.' },
+  { signal: 'What ran upstream in the last 2 hours?', coverage: 'partial', tool: 'Dagster list_runs + asset health check + cross-pipeline incident query', desc: 'Implemented: recently-failed assets + recentUpstreamFailures from Neon incidents. Gap: cross-orchestrator (Airflow pipeline failed → Dagster downstream sees it only if both write to incidents table).' },
+  { signal: 'Full cross-vendor lineage graph', coverage: 'partial', tool: 'dbt sources.yml (via GitHub) + Dagster asset graph + commit SHA lookup', desc: 'Partial: commit SHA from run metadata → GitHub API → actual changed files. dbt sources.yml maps Fivetran connectors. True full lineage requires OpenLineage/Marquez emitting from all tools.' },
+  { signal: 'Databricks job context / Unity Catalog lineage', coverage: 'gap', tool: '—', desc: 'Databricks Jobs API + Unity Catalog lineage would provide Databricks-equivalent of Dagster asset graph. Integration stub exists at lib/integrations/databricks.ts — needs AWS SDK + Databricks token.' },
+  { signal: 'Legacy cron jobs / no orchestrator', coverage: 'partial', tool: 'Webhook at /api/webhooks/github-actions (any HTTP client)', desc: 'Any cron job can POST to Dispatch on failure. The webhook endpoint receives the failure, logs to incidents table, and Slacks the team. Full triage auto-trigger is one function call from the stub.' },
 ];
 
 // -------------------------------------------------------------------
