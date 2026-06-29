@@ -801,16 +801,32 @@ function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportTex
       }
     }
 
-    // Dagster rerun — always relevant for Dagster failures
-    derived.push({
-      id: 'rerun_dagster',
-      label: 'Rerun in Dagster',
-      description: 'Re-execute the failed run from the failed step (after addressing root cause).',
-      risk: 'low',
-      actionConfidence: 'Medium',
-      requiresApproval: true,
-      params: {},
-    });
+    // Dagster rerun — only when we have a real run ID from incident history or context
+    const dagsterRunId = (incidentOut as { recentIncidents?: Array<{ dagster_run_id?: string }> })
+      ?.recentIncidents?.find(r => r.dagster_run_id)?.dagster_run_id;
+
+    if (dagsterRunId) {
+      derived.push({
+        id: 'rerun_dagster',
+        label: 'Rerun in Dagster',
+        description: 'Re-execute from the failed step (after addressing root cause).',
+        risk: 'low',
+        actionConfidence: 'Medium',
+        requiresApproval: true,
+        params: { runId: dagsterRunId },
+      });
+    } else if (ft !== 'unknown' && ft !== 'schema_mismatch' && ft !== 'dbt_compilation_error') {
+      // No run ID — link to Dagster dashboard instead
+      derived.push({
+        id: 'open_dashboard',
+        label: 'Open Dagster dashboard',
+        description: 'View runs, asset graph, and full logs in Dagster UI.',
+        risk: 'none',
+        actionConfidence: 'High',
+        requiresApproval: false,
+        params: { url: 'https://hooli.dagster.cloud/data-eng-prod/runs' },
+      });
+    }
 
     // Known flaky → mark resolved
     if (incidentOut?.knownFlaky) {
