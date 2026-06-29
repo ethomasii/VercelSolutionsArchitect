@@ -4,6 +4,7 @@ import { sql } from './db';
 import { getRecentChanges, readRepoFile } from './integrations/github';
 import { searchRunbooks as searchConfluence } from './integrations/confluence';
 import { checkVendorStatus, detectVendors } from './vendor-status';
+import { findConnectorsForPipeline, getConnectorStatus } from './integrations/fivetran';
 
 // This file is the architectural core of Dispatch. The tool interface never
 // changes — only the execute() function bodies change as we wire up real
@@ -356,11 +357,32 @@ A vendor outage transforms the remediation: "wait for recovery" not "debug code.
       const incidents = results.filter(r => r.activeIncidents.length > 0);
       const degraded = results.filter(r => r.level !== 'operational' && r.level !== 'unknown');
 
+      // Extend with Fivetran connector-level status when Fivetran is in the vendor list
+      // This catches 0-row silent failures that the status page doesn't show
+      let fivetranConnectors: Array<{ id: string; service: string; schema: string; status: unknown }> = [];
+      if (vendorList.includes('fivetran') && pipelineName) {
+        const connectors = await findConnectorsForPipeline(pipelineName);
+        fivetranConnectors = await Promise.all(
+          connectors.map(async c => ({
+            ...c,
+            status: await getConnectorStatus(c.id),
+          }))
+        );
+      }
+
+      const silentFailures = fivetranConnectors.filter(
+        c => (c.status as { isSilentFailure?: boolean }).isSilentFailure
+      );
+
       return {
         checked: results,
         hasActiveIncidents: incidents.length > 0,
         degradedVendors: degraded.map(r => r.vendor),
-        summary: incidents.length > 0
+        fivetranConnectors: fivetranConnectors.length > 0 ? fivetranConnectors : undefined,
+        hasSilentFivetranFailure: silentFailures.length > 0,
+        summary: silentFailures.length > 0
+          ? `⚠️ Fivetran SILENT FAILURE: ${silentFailures.map(c => `${c.service} (0 rows, abnormally fast sync)`).join(', ')}`
+          : incidents.length > 0
           ? `⚠️ Active incidents: ${incidents.map(r => `${r.vendor} (${r.description})`).join(', ')}`
           : degraded.length > 0
           ? `${degraded.map(r => r.vendor).join(', ')} reporting degraded performance`
