@@ -801,32 +801,9 @@ function MessageParts({ parts, reportText }: { parts: UIMessagePart[]; reportTex
       }
     }
 
-    // Dagster rerun — only when we have a real run ID from incident history or context
-    const dagsterRunId = (incidentOut as { recentIncidents?: Array<{ dagster_run_id?: string }> })
-      ?.recentIncidents?.find(r => r.dagster_run_id)?.dagster_run_id;
-
-    if (dagsterRunId) {
-      derived.push({
-        id: 'rerun_dagster',
-        label: 'Rerun in Dagster',
-        description: 'Re-execute from the failed step (after addressing root cause).',
-        risk: 'low',
-        actionConfidence: 'Medium',
-        requiresApproval: true,
-        params: { runId: dagsterRunId },
-      });
-    } else if (ft !== 'unknown' && ft !== 'schema_mismatch' && ft !== 'dbt_compilation_error') {
-      // No run ID — link to Dagster dashboard instead
-      derived.push({
-        id: 'open_dashboard',
-        label: 'Open Dagster dashboard',
-        description: 'View runs, asset graph, and full logs in Dagster UI.',
-        risk: 'none',
-        actionConfidence: 'High',
-        requiresApproval: false,
-        params: { url: 'https://hooli.dagster.cloud/data-eng-prod/runs' },
-      });
-    }
+    // Only offer a dashboard link — don't assume which orchestrator ran this
+    // The LLM's proposeActions (when it runs) handles orchestrator-specific reruns
+    // based on the full context (dagster/airflow/prefect/step-functions/etc.)
 
     // Known flaky → mark resolved
     if (incidentOut?.knownFlaky) {

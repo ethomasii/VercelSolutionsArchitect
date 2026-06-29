@@ -389,18 +389,20 @@ Always include:
 - Whether actions address root cause or just restart the symptom
 
 Action types:
-- "rerun_dagster": re-execute from failed step (AFTER root cause addressed)
-- "trigger_fivetran_sync": upstream_data_missing + Fivetran identified
-- "create_pr": code regression where the fix is deterministic (exact file + change known)
-- "open_dashboard": navigate to a relevant URL (Dagster UI, GitHub commit, vendor status)
-  Use this instead of "custom" — always prefer open_dashboard with params.url set
-- "create_jira_ticket": any High confidence failure worth tracking
+- "rerun_dagster": ONLY if the pipeline explicitly ran in Dagster AND you have the runId from the logs
+  For Airflow → do NOT use rerun_dagster, use open_dashboard with the Airflow run URL
+  For Prefect → do NOT use rerun_dagster, use open_dashboard with the Prefect flow run URL
+  For Step Functions / cron / GitHub Actions → use open_dashboard or create_slack_alert instead
+- "trigger_fivetran_sync": upstream_data_missing + Fivetran identified as source
+- "create_pr": code regression or schema_mismatch where exact file + change is known
+- "open_dashboard": link to the relevant tool (Dagster UI, GitHub PR, Airflow DAG, vendor status page)
+  Use this for any orchestrator that isn't Dagster, or when no run ID is available
+- "create_jira_ticket": any High confidence failure worth tracking  
 - "create_slack_alert": always useful to notify the team
 - "mark_resolved": when pattern is "wait and it resolves"
 
-NEVER use "custom" as an action id. Use "open_dashboard" with params.url for navigation actions.
-For the Dagster UI traceback: use open_dashboard with url pointing to the run logs.
-For GitHub commits: use open_dashboard with the commit URL.`,
+NEVER use "custom" as an action id. NEVER assume the orchestrator is Dagster unless explicitly stated.
+For Airflow, Prefect, Step Functions, or cron pipelines: use open_dashboard with the correct URL.`,
     inputSchema: z.object({
       failureType: z.string(),
       affectedPipeline: z.string(),
