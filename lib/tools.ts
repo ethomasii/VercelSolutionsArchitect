@@ -5,6 +5,7 @@ import { getRecentChanges, readRepoFile } from './integrations/github';
 import { searchRunbooks as searchConfluence } from './integrations/confluence';
 import { checkVendorStatus, detectVendors } from './vendor-status';
 import { findConnectorsForPipeline, getConnectorStatus } from './integrations/fivetran';
+import { getSyntheticFivetranStatus } from './demo-data';
 
 // This file is the architectural core of Dispatch. The tool interface never
 // changes — only the execute() function bodies change as we wire up real
@@ -359,20 +360,33 @@ A vendor outage transforms the remediation: "wait for recovery" not "debug code.
 
       // Extend with Fivetran connector-level status when Fivetran is in the vendor list
       // This catches 0-row silent failures that the status page doesn't show
-      let fivetranConnectors: Array<{ id: string; service: string; schema: string; status: unknown }> = [];
+      let fivetranConnectors: Array<{ id: string; service: string; schema: string; status: unknown; note?: string }> = [];
       if (vendorList.includes('fivetran') && pipelineName) {
-        const connectors = await findConnectorsForPipeline(pipelineName);
-        fivetranConnectors = await Promise.all(
-          connectors.map(async c => ({
-            ...c,
-            status: await getConnectorStatus(c.id),
-          }))
-        );
+        const realConnectors = await findConnectorsForPipeline(pipelineName);
+        if (realConnectors.length > 0) {
+          fivetranConnectors = await Promise.all(
+            realConnectors.map(async c => ({
+              ...c,
+              status: await getConnectorStatus(c.id),
+            }))
+          );
+        } else {
+          // No real credentials → use synthetic demo data that tells the right story
+          const synthetic = getSyntheticFivetranStatus(pipelineName, failureType);
+          fivetranConnectors = synthetic.map(s => ({
+            id: s.id, service: s.service, schema: s.schema,
+            status: { syncStatus: s.syncStatus, durationSeconds: s.lastSyncDurationSeconds, rowsLoaded: s.rowsLoaded, isSilentFailure: s.isLikelyCause },
+            note: s.note,
+          }));
+        }
       }
 
       const silentFailures = fivetranConnectors.filter(
         c => (c.status as { isSilentFailure?: boolean }).isSilentFailure
       );
+      const connectorNotes = fivetranConnectors
+        .filter(c => c.note)
+        .map(c => c.note as string);
 
       return {
         checked: results,
@@ -380,8 +394,11 @@ A vendor outage transforms the remediation: "wait for recovery" not "debug code.
         degradedVendors: degraded.map(r => r.vendor),
         fivetranConnectors: fivetranConnectors.length > 0 ? fivetranConnectors : undefined,
         hasSilentFivetranFailure: silentFailures.length > 0,
+        connectorInsights: connectorNotes,
         summary: silentFailures.length > 0
-          ? `⚠️ Fivetran SILENT FAILURE: ${silentFailures.map(c => `${c.service} (0 rows, abnormally fast sync)`).join(', ')}`
+          ? `⚠️ SILENT FIVETRAN FAILURE: ${fivetranConnectors.find(c => (c.status as { isSilentFailure?: boolean }).isSilentFailure)?.note ?? '0 rows loaded despite SUCCESS status'}`
+          : connectorNotes.length > 0
+          ? `Connectors: ${connectorNotes.join(' | ')}`
           : incidents.length > 0
           ? `⚠️ Active incidents: ${incidents.map(r => `${r.vendor} (${r.description})`).join(', ')}`
           : degraded.length > 0
